@@ -626,7 +626,9 @@ export async function clearFlaggedAccounts(options?: {
             // marker refreshed by the save is the designed opt-out and
             // interrupted-migration fallback; deleting it would leave the
             // survivors with no on-disk recovery copy. A marker that cannot
-            // be read is left alone: it is not proven stale.
+            // be read is NOT exempt: it may still hold the pre-fresh flagged
+            // set, and the loader would happily recover from it — attempt
+            // removal rather than silently keep a plaintext token copy.
             for (const markerPath of await listKeychainMigrationMarkers(
               getFlaggedAccountsPath(),
             )) {
@@ -638,7 +640,7 @@ export async function clearFlaggedAccounts(options?: {
               } catch {
                 markerContent = null;
               }
-              if (markerContent === null || markerContent === expected) {
+              if (markerContent !== null && markerContent === expected) {
                 continue;
               }
               try {

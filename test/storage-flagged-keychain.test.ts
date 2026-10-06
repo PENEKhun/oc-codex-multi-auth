@@ -607,6 +607,53 @@ describe("flagged-store load/save/clear with CODEX_KEYCHAIN", () => {
 		]);
 	});
 
+	it("clearFlaggedAccounts removes a migration marker it cannot read", async () => {
+		// An unreadable marker may still hold the pre-fresh flagged set and the
+		// loader would recover from it — it must be removed, not kept on the
+		// "not proven stale" theory (greptile P1 on PR #289).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+		const markerPath = `${flaggedPath}.migrated-to-keychain.111`;
+		await fs.writeFile(markerPath, JSON.stringify(base), {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+
+		const originalReadFile = fs.readFile;
+		const readFile = vi
+			.spyOn(fs, "readFile")
+			.mockImplementation((path: unknown, ...rest: unknown[]) => {
+				if (String(path) === markerPath) {
+					const err = new Error("denied") as NodeJS.ErrnoException;
+					err.code = "EACCES";
+					return Promise.reject(err);
+				}
+				return Reflect.apply(originalReadFile, fs, [
+					path,
+					...rest,
+				]) as ReturnType<typeof fs.readFile>;
+			});
+		try {
+			await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+		} finally {
+			readFile.mockRestore();
+		}
+
+		expect(existsSync(markerPath)).toBe(false);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-late",
+		]);
+	});
+
 	it("clearFlaggedAccounts retires a stale keychain entry when the survivor save falls back to JSON", async () => {
 		// Under opt-in the survivor save tries the keychain first; when that
 		// write fails the JSON fallback lands but the pre-clear entry keeps the
