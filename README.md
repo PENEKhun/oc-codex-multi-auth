@@ -91,7 +91,7 @@ opencode auth login   # OpenAI -> Codex OAuth (Add account — ChatGPT Plus/Pro)
 
 ## Command map
 
-Two surfaces: **24 `codex-*` tools** inside an OpenCode session, and a standalone CLI for everything else. The full argument reference is in [docs/tools-and-cli.md](docs/tools-and-cli.md).
+Two surfaces: **25 `codex-*` tools** inside an OpenCode session, and a standalone CLI for everything else. The full argument reference is in [docs/tools-and-cli.md](docs/tools-and-cli.md).
 
 | Group | Tools | Purpose |
 | --- | --- | --- |

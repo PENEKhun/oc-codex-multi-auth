@@ -370,6 +370,7 @@ type MockManagedAccount = {
 	email?: string;
 	refreshToken: string;
 	addedAt?: number;
+	accountNote?: string;
 	/** `false` makes rotation skip it, standing in for rate-limited/cooling down. */
 	selectable?: boolean;
 };
@@ -719,9 +720,10 @@ type PluginType = {
 		}>;
 		"codex-note": ToolExecute<{ index?: number; note: string }>;
 		"codex-dashboard": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
-		"codex-health": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
+		"codex-health": OptionalToolExecute<{ format?: string; includeSensitive?: boolean; includeDisabled?: boolean }>;
+		"codex-enable": OptionalToolExecute<{ index?: number }>;
 		"codex-remove": OptionalToolExecute<{ index?: number; confirm?: boolean }>;
-		"codex-refresh": ToolExecute;
+		"codex-refresh": OptionalToolExecute<{ includeDisabled?: boolean }>;
 		"codex-export": ToolExecute<{ path?: string; force?: boolean; timestamped?: boolean }>;
 		"codex-import": ToolExecute<{ path: string; dryRun?: boolean }>;
 	};
@@ -790,6 +792,7 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(plugin.tool["codex-note"]).toBeDefined();
 			expect(plugin.tool["codex-dashboard"]).toBeDefined();
 			expect(plugin.tool["codex-health"]).toBeDefined();
+			expect(plugin.tool["codex-enable"]).toBeDefined();
 			expect(plugin.tool["codex-remove"]).toBeDefined();
 			expect(plugin.tool["codex-refresh"]).toBeDefined();
 			expect(plugin.tool["codex-export"]).toBeDefined();
@@ -3485,6 +3488,36 @@ describe("OpenAIOAuthPlugin", () => {
 				refresh: `${token}-new`,
 				expires: Date.now() + 3_600_000,
 			}));
+		});
+
+		it("skips disabled accounts by default and validates them with includeDisabled (#288)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r1",
+					email: "user@example.com",
+					enabled: false,
+					accountNote:
+						"Disabled automatically after repeated authentication failures.",
+				},
+			];
+			const { queuedRefresh } = await import("../lib/refresh-queue.js");
+			vi.mocked(queuedRefresh).mockImplementation(async (token: string) => ({
+				type: "success" as const,
+				access: `${token}-access`,
+				refresh: `${token}-new`,
+				expires: Date.now() + 3_600_000,
+			}));
+
+			const skipped = await plugin.tool["codex-health"].execute();
+			expect(skipped).toContain("Skipped (disabled)");
+			expect(skipped).toContain("includeDisabled=true");
+
+			const validated = await plugin.tool["codex-health"].execute({
+				includeDisabled: true,
+			});
+			expect(validated).toContain("Healthy (disabled");
+			expect(validated).toContain("codex-enable");
+			expect(validated).not.toContain("Skipped (disabled)");
 		});
 
 		it("persists rotated tokens so a restart does not report refresh_token_reused", async () => {
@@ -7391,6 +7424,68 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 					message: `All 1 account(s) failed (server errors or auth issues). Check account health with \`codex-health\`. Request logs live in ${LOG_DIR} (enable with ENABLE_PLUGIN_REQUEST_LOGGING=1).`,
 				},
 			});
+		});
+
+		it("reports all_accounts_disabled with the auto-disable reason instead of masquerading as rate-limited (#288)", async () => {
+			const accountsModule = await import("../lib/accounts.js");
+			const configModule = await import("../lib/config.js");
+			const { AUTH_FAILURE_DISABLE_NOTE_MARKER } = await import(
+				"../lib/accounts/state.js"
+			);
+			setMockManagedAccounts([
+				{
+					accountId: "acc-1",
+					email: "user@example.com",
+					refreshToken: "refresh-1",
+					enabled: false,
+					accountNote: AUTH_FAILURE_DISABLE_NOTE_MARKER,
+				},
+			]);
+			// A leftover auth-failure cooldown produces waitMs > 0 — the failure
+			// must still report disabled, not "all rate-limited".
+			vi.spyOn(
+				accountsModule.AccountManager.prototype,
+				"getMinWaitTimeForFamily",
+			).mockReturnValue(60_000);
+			// Bound the all-rate-limited retry window below waitMs so the request
+			// reaches the terminal error instead of sleeping out the cooldown.
+			vi.mocked(configModule.loadPluginConfig).mockReturnValue({
+				retryAllAccountsMaxWaitMs: 1,
+			});
+			globalThis.fetch = vi.fn();
+
+			const { sdk } = await setupPlugin();
+			const response = await requestGpt54Pro(sdk);
+			const body = await response.json();
+
+			expect(response.status).toBe(503);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+			expect(body.error.code).toBe("all_accounts_disabled");
+			expect(body.error.message).toContain("disabled automatically");
+			expect(body.error.message).toContain("codex-enable");
+			expect(body.error.message).not.toContain("rate-limited");
+		});
+
+		it("reports all_accounts_disabled for an operator-disabled pool (#288)", async () => {
+			setMockManagedAccounts([
+				{
+					accountId: "acc-1",
+					email: "user@example.com",
+					refreshToken: "refresh-1",
+					enabled: false,
+				},
+			]);
+			globalThis.fetch = vi.fn();
+
+			const { sdk } = await setupPlugin();
+			const response = await requestGpt54Pro(sdk);
+			const body = await response.json();
+
+			expect(response.status).toBe(503);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+			expect(body.error.code).toBe("all_accounts_disabled");
+			expect(body.error.message).toContain("are disabled");
+			expect(body.error.message).toContain("codex-enable");
 		});
 
 		it("handles empty body in request", async () => {

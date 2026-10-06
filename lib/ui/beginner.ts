@@ -11,6 +11,8 @@ export interface BeginnerAccountSnapshot {
 	rateLimitedUntil: number | null;
 	coolingDownUntil: number | null;
 	refreshVerificationFailed?: boolean;
+	/** `describeDisabledReason` output when `enabled` is false; null otherwise. */
+	disabledReason?: string | null;
 }
 
 export interface BeginnerRuntimeSnapshot {
@@ -230,11 +232,26 @@ export function buildBeginnerDoctorFindings(input: {
 	}
 
 	if (summary.disabled > 0) {
+		// A plugin-disabled account carries its reason on the snapshot so the
+		// fix reads as "validate, then codex-enable" instead of the generic
+		// enable wording that fits an operator's deliberate disable (#288).
+		const autoDisabledCount = input.accounts.filter(
+			(account) =>
+				!account.enabled &&
+				(account.disabledReason === "disabled:auth-failures" ||
+					account.disabledReason === "disabled:workspace-deactivated"),
+		).length;
 		findings.push({
-			severity: "warning",
+			severity: summary.disabled === summary.total ? "error" : "warning",
 			code: "disabled-accounts",
-			summary: `${summary.disabled} account(s) are disabled.`,
-			action: "Enable or replace disabled accounts to improve failover.",
+			summary:
+				autoDisabledCount === summary.disabled
+					? `${summary.disabled} account(s) were disabled automatically after repeated failures or deactivation.`
+					: `${summary.disabled} account(s) are disabled.`,
+			action:
+				autoDisabledCount > 0
+					? "Validate retained credentials with `codex-health includeDisabled=true`, then re-enable with `codex-enable`."
+					: "Re-enable with `codex-enable` or replace disabled accounts to improve failover.",
 		});
 	}
 
@@ -339,6 +356,17 @@ export function recommendBeginnerNextAction(input: {
 	const summary = summarizeBeginnerAccounts(input.accounts, input.now);
 	if (summary.total === 0) {
 		return "Run `opencode auth login` to add your first account.";
+	}
+	if (summary.disabled === summary.total) {
+		const anyAutoDisabled = input.accounts.some(
+			(account) =>
+				!account.enabled &&
+				(account.disabledReason === "disabled:auth-failures" ||
+					account.disabledReason === "disabled:workspace-deactivated"),
+		);
+		return anyAutoDisabled
+			? "All accounts were disabled automatically. Validate with `codex-health includeDisabled=true`, then re-enable with `codex-enable`."
+			: "All accounts are disabled. Re-enable one with `codex-enable` or add an account with `opencode auth login`.";
 	}
 	if (summary.healthy === 0) {
 		return "Run `codex-health`, then re-login or switch to a healthy account.";

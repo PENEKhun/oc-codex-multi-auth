@@ -272,3 +272,57 @@ describe("codex-refresh tool concurrency (lost-update regression)", () => {
 		expect(output).toContain("1 refreshed, 0 failed");
 	});
 });
+
+describe("codex-refresh includeDisabled (#288)", () => {
+	beforeEach(() => {
+		vi.mocked(loadAccounts).mockReset();
+		vi.mocked(withAccountStorageTransaction).mockReset();
+		vi.mocked(queuedRefresh).mockClear();
+	});
+
+	const disabledStorage = (): AccountStorageV3 => ({
+		version: 3,
+		activeIndex: 0,
+		accounts: [
+			{
+				email: "user@example.com",
+				refreshToken: "r1",
+				addedAt: 1,
+				lastUsed: 1,
+				enabled: false,
+			},
+		],
+	});
+
+	it("skips disabled accounts by default and points at includeDisabled", async () => {
+		vi.mocked(loadAccounts).mockResolvedValue(disabledStorage());
+		vi.mocked(withAccountStorageTransaction).mockImplementation(
+			async (handler) => handler(disabledStorage(), async () => {}),
+		);
+
+		const tool = createCodexRefreshTool(buildCtx(false));
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(queuedRefresh).not.toHaveBeenCalled();
+		expect(output).toContain("Skipped (disabled)");
+		expect(output).toContain("includeDisabled=true");
+	});
+
+	it("validates a disabled credential with includeDisabled without re-enabling it", async () => {
+		vi.mocked(loadAccounts).mockResolvedValue(disabledStorage());
+		vi.mocked(withAccountStorageTransaction).mockImplementation(
+			async (handler) => handler(disabledStorage(), async () => {}),
+		);
+
+		const tool = createCodexRefreshTool(buildCtx(false));
+		const output = (await tool.execute(
+			{ includeDisabled: true },
+			{} as never,
+		)) as string;
+
+		expect(queuedRefresh).toHaveBeenCalledWith("r1");
+		expect(output).toContain("Refreshed");
+		expect(output).toContain("still disabled");
+		expect(output).toContain("codex-enable");
+	});
+});

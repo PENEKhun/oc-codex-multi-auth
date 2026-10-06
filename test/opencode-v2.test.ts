@@ -352,6 +352,71 @@ describe("V2 compatibility adapter", () => {
 		await cleanup();
 	});
 
+	it("skips disabled pool accounts when resolving the request credential", async () => {
+		mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [
+			{ refreshToken: "disabled-refresh", enabled: false },
+			{ refreshToken: "enabled-refresh", accessToken: "enabled-access", expiresAt: 42 },
+		] });
+		const h = host();
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		let getAuth: (() => Promise<unknown>) | undefined;
+		loader.mockImplementationOnce(async (resolve) => {
+			getAuth = resolve as () => Promise<unknown>;
+			return { apiKey: "placeholder", fetch: transport };
+		});
+		await h.hooks.get("sdk")?.({ model: h.model, package: h.provider.package, options: {} });
+		if (getAuth === undefined) throw new Error("loader did not capture resolveAuth");
+		await expect(getAuth()).resolves.toMatchObject({ refresh: "enabled-refresh", access: "enabled-access" });
+		await cleanup();
+	});
+
+	it("falls back to the host openai connection when every pooled account is disabled", async () => {
+		mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [
+			{ refreshToken: "disabled-refresh", enabled: false },
+		] });
+		const h = host();
+		const connection = h.context.integration.connection as unknown as {
+			active: ReturnType<typeof vi.fn>;
+			resolve: ReturnType<typeof vi.fn>;
+		};
+		connection.active.mockResolvedValue({ id: "host-conn" });
+		connection.resolve.mockResolvedValue({ type: "oauth", access: "host-access", refresh: "host-refresh", expires: 9 });
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		let getAuth: (() => Promise<unknown>) | undefined;
+		loader.mockImplementationOnce(async (resolve) => {
+			getAuth = resolve as () => Promise<unknown>;
+			return { apiKey: "placeholder", fetch: transport };
+		});
+		await h.hooks.get("sdk")?.({ model: h.model, package: h.provider.package, options: {} });
+		if (getAuth === undefined) throw new Error("loader did not capture resolveAuth");
+		// The host credential may still serve requests outside the managed pool —
+		// the same path codex-doctor surfaces as a finding.
+		await expect(getAuth()).resolves.toMatchObject({ access: "host-access" });
+		await cleanup();
+	});
+
+	it("points at codex-enable when the pool flips to all-disabled before a request", async () => {
+		// Enabled at setup so the adapter arms; the pool then flips all-disabled
+		// before the first request resolves its credential.
+		mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [
+			{ refreshToken: "enabled-refresh" },
+		] });
+		const h = host();
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [
+			{ refreshToken: "disabled-refresh", enabled: false },
+		] });
+		let getAuth: (() => Promise<unknown>) | undefined;
+		loader.mockImplementationOnce(async (resolve) => {
+			getAuth = resolve as () => Promise<unknown>;
+			return { apiKey: "placeholder", fetch: transport };
+		});
+		await h.hooks.get("sdk")?.({ model: h.model, package: h.provider.package, options: {} });
+		if (getAuth === undefined) throw new Error("loader did not capture resolveAuth");
+		await expect(getAuth()).rejects.toThrow("codex-enable");
+		await cleanup();
+	});
+
 	it("forwards provider options the host resolved into the OpenAI SDK factory", async () => {
 		const h = host();
 		const cleanup = await setupV2(h.context, mocks.runtime);

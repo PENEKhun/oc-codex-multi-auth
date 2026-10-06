@@ -10,6 +10,8 @@ import {
 import { clearTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 import { createCodexDoctorTool } from "../lib/tools/codex-doctor.js";
 import { repairDoctorAccounts } from "../lib/tools/doctor-repair.js";
+import { readHostOpenAIOAuth } from "../lib/host-auth.js";
+import { describeDisabledReason } from "../lib/accounts/state.js";
 import type { ToolContext } from "../lib/tools/index.js";
 import type { RuntimeMetrics } from "../lib/runtime.js";
 import type {
@@ -44,6 +46,11 @@ vi.mock("../lib/plugin-origin.js", () => ({
 	describePluginOrigin: vi.fn(() => "test-origin"),
 	findReplacedLocalCheckout: vi.fn(() => null),
 	readPluginOriginHistory: vi.fn(() => []),
+}));
+
+// Host auth.json presence is steered per test — the default reads as absent.
+vi.mock("../lib/host-auth.js", () => ({
+	readHostOpenAIOAuth: vi.fn(async () => null),
 }));
 
 function buildAccount(
@@ -153,6 +160,10 @@ function toSnapshots(
 		isActive: index === activeIndex,
 		rateLimitedUntil: null,
 		coolingDownUntil: null,
+		disabledReason:
+			account.enabled === false
+				? describeDisabledReason(account.accountNote)
+				: null,
 	}));
 }
 
@@ -436,5 +447,93 @@ describe("codex-doctor tool — fix flow", () => {
 		const parsed = JSON.parse(raw) as { autoFix: unknown };
 
 		expect(parsed.autoFix).toBeNull();
+	});
+});
+
+describe("codex-doctor — disabled account recovery findings (#288)", () => {
+	it("describes auto-disabled accounts with validate-then-enable guidance", async () => {
+		const { AUTH_FAILURE_DISABLE_NOTE_MARKER } = await import(
+			"../lib/accounts/state.js"
+		);
+		vi.mocked(loadAccounts).mockResolvedValue(
+			buildStorage({
+				accounts: [
+					buildAccount({
+						enabled: false,
+						accountNote: `weekday primary. ${AUTH_FAILURE_DISABLE_NOTE_MARKER}`,
+					}),
+				],
+			}),
+		);
+		const { ctx } = buildCtx();
+		const tool = createCodexDoctorTool(ctx);
+
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(output).toContain("disabled automatically");
+		expect(output).toContain("codex-health includeDisabled=true");
+		expect(output).toContain("codex-enable");
+		// The recommended next step names the dead end explicitly.
+		expect(output).toContain("All accounts were disabled automatically");
+		// Operator text around the marker is not the story here; the reason is.
+		expect(output).not.toContain("are disabled.\n");
+	});
+
+	it("keeps operator-disable wording for a bare enabled:false record", async () => {
+		vi.mocked(loadAccounts).mockResolvedValue(
+			buildStorage({
+				accounts: [
+					buildAccount({ enabled: false }),
+					buildAccount(),
+				],
+			}),
+		);
+		const { ctx } = buildCtx();
+		const tool = createCodexDoctorTool(ctx);
+
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(output).toContain("1 account(s) are disabled.");
+		expect(output).toContain("codex-enable");
+		expect(output).not.toContain("disabled automatically");
+	});
+
+	it("flags a host-level OAuth credential when every pool account is disabled", async () => {
+		vi.mocked(readHostOpenAIOAuth).mockResolvedValue({
+			access: "a",
+			refresh: "r",
+			expires: 1,
+		});
+		vi.mocked(loadAccounts).mockResolvedValue(
+			buildStorage({
+				accounts: [buildAccount({ enabled: false })],
+			}),
+		);
+		const { ctx } = buildCtx();
+		const tool = createCodexDoctorTool(ctx);
+
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(output).toContain("outside the managed pool");
+		expect(output).toContain("codex-enable");
+	});
+
+	it("omits the host finding while any pool account stays enabled", async () => {
+		vi.mocked(readHostOpenAIOAuth).mockResolvedValue({
+			access: "a",
+			refresh: "r",
+			expires: 1,
+		});
+		vi.mocked(loadAccounts).mockResolvedValue(
+			buildStorage({
+				accounts: [buildAccount({ enabled: false }), buildAccount()],
+			}),
+		);
+		const { ctx } = buildCtx();
+		const tool = createCodexDoctorTool(ctx);
+
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(output).not.toContain("outside the managed pool");
 	});
 });
