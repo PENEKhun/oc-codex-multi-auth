@@ -42,7 +42,7 @@ oc-codex-multi-auth limits          # usage windows across the pool
 | I want to... | Read |
 | --- | --- |
 | Install and sign in | [getting-started.md](getting-started.md) |
-| Tour the 24 tools and the CLI | [tools-and-cli.md](tools-and-cli.md) |
+| Tour the 25 tools and the CLI | [tools-and-cli.md](tools-and-cli.md) |
 | Understand the components and request flow | [architecture.md](architecture.md) |
 | Change settings or environment overrides | [configuration.md](configuration.md) |
 | Upgrade from an older name or release | [upgrade.md](upgrade.md) |

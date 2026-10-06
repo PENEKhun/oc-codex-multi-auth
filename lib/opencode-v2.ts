@@ -349,7 +349,7 @@ async function setupScopedV2(
 			// Disabled accounts never serve requests — prefer the active seat
 			// when enabled, else the first enabled account; the host's own
 			// `openai` connection is the documented outside-pool fallback.
-			const active = pool === undefined ? undefined : accounts[pool.activeIndex];
+			const active = pool ? accounts[pool.activeIndex] : undefined;
 			const account =
 				active && active.enabled !== false
 					? active

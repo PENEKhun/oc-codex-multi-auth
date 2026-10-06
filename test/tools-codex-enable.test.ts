@@ -68,6 +68,7 @@ function buildCtx(options: { pickIndex?: number | null } = {}): ToolContext {
 		supportsInteractiveMenus: () => false,
 		cachedAccountManagerRef: { current: null },
 		accountManagerPromiseRef: { current: null },
+		invalidateAccountManagerCache: vi.fn(),
 	};
 	return ctx as unknown as ToolContext;
 }

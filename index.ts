@@ -4584,7 +4584,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										? "No Codex accounts configured. Run `opencode auth login`."
 										: allDisabled
 											? allAutoDisabled
-												? `All ${count} Codex account(s) were disabled automatically after repeated authentication failures. Validate the retained credentials with \`codex-health includeDisabled=true\`, then re-enable with \`codex-enable\` — or add an account with \`opencode auth login\`.`
+												? `All ${count} Codex account(s) were disabled automatically (repeated authentication failures or workspace deactivation). Validate the retained credentials with \`codex-health includeDisabled=true\`, then re-enable with \`codex-enable\` — or add an account with \`opencode auth login\`.`
 												: `All ${count} Codex account(s) are disabled. Re-enable with \`codex-enable\` or add an account with \`opencode auth login\`.`
 											: waitMs > 0
 												? `All ${count} account(s) are rate-limited. Try again in ${waitLabel} or add another account with \`opencode auth login\`.${outOfQuotaCredits}`

@@ -29,6 +29,7 @@ export function createCodexEnableTool(ctx: ToolContext): ToolDefinition {
 		resolveMaskEmail,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
+		invalidateAccountManagerCache,
 	} = ctx;
 	const definition = tool({
 		description:
@@ -233,13 +234,25 @@ export function createCodexEnableTool(ctx: ToolContext): ToolDefinition {
 				return `${outcome.label} is already enabled.`;
 			}
 
-			// A new manager is mandatory, not just polite: pendingDisabledAccounts
-			// inside the old one would re-disable this slot on the next save while
-			// its un-rotated credential still matches.
+			// A new manager is mandatory, not just polite: a queued save on the
+			// old one must not resurrect the disabled state this transaction
+			// just rewrote. Invalidating retires it through the dispose+flush
+			// path — post-dispose writes merge only volatile fields, so its
+			// stale enabled/accountNote can never come back while fresh
+			// rate-limit evidence is still published.
 			if (cachedAccountManagerRef.current) {
-				const reloadedManager = await AccountManager.loadFromDisk();
-				cachedAccountManagerRef.current = reloadedManager;
-				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
+				invalidateAccountManagerCache();
+				try {
+					const reloadedManager = await AccountManager.loadFromDisk();
+					cachedAccountManagerRef.current = reloadedManager;
+					accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
+				} catch (error) {
+					// The enable already committed; a failed reload only delays the
+					// live pool seeing it — the next account access rebuilds.
+					logWarn(
+						`codex-enable: account enabled on disk but the manager reload failed; the next account access will retry (${error instanceof Error ? error.message : String(error)})`,
+					);
+				}
 			}
 
 			const { label, wasAutoDisabled } = outcome;

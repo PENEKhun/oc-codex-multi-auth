@@ -358,15 +358,19 @@ export function recommendBeginnerNextAction(input: {
 		return "Run `opencode auth login` to add your first account.";
 	}
 	if (summary.disabled === summary.total) {
-		const anyAutoDisabled = input.accounts.some(
-			(account) =>
-				!account.enabled &&
-				(account.disabledReason === "disabled:auth-failures" ||
-					account.disabledReason === "disabled:workspace-deactivated"),
+		const hasAutoDisableReason = (account: BeginnerAccountSnapshot): boolean =>
+			account.disabledReason === "disabled:auth-failures" ||
+			account.disabledReason === "disabled:workspace-deactivated";
+		const disabledAccounts = input.accounts.filter(
+			(account) => !account.enabled,
 		);
-		return anyAutoDisabled
+		const allAutoDisabled = disabledAccounts.every(hasAutoDisableReason);
+		const anyAutoDisabled = disabledAccounts.some(hasAutoDisableReason);
+		return allAutoDisabled
 			? "All accounts were disabled automatically. Validate with `codex-health includeDisabled=true`, then re-enable with `codex-enable`."
-			: "All accounts are disabled. Re-enable one with `codex-enable` or add an account with `opencode auth login`.";
+			: anyAutoDisabled
+				? "Some accounts were disabled automatically and some by hand. Validate with `codex-health includeDisabled=true`, then re-enable with `codex-enable`."
+				: "All accounts are disabled. Re-enable one with `codex-enable` or add an account with `opencode auth login`.";
 	}
 	if (summary.healthy === 0) {
 		return "Run `codex-health`, then re-login or switch to a healthy account.";

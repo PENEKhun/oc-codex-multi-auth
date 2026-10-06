@@ -96,7 +96,7 @@ Two surfaces: **25 `codex-*` tools** inside an OpenCode session, and a standalon
 | Group | Tools | Purpose |
 | --- | --- | --- |
 | Setup | `codex-setup`, `codex-help`, `codex-next` | guided first-run checklist, help by topic, suggested next action |
-| Accounts | `codex-status`, `codex-list`, `codex-switch`, `codex-remove` | inspect the pool, pin or switch the active account, drop entries |
+| Accounts | `codex-status`, `codex-list`, `codex-switch`, `codex-enable`, `codex-remove` | inspect the pool, pin or switch the active account, re-enable or drop entries |
 | Identity | `codex-label`, `codex-tag`, `codex-note` | name accounts, group them with tags, attach private notes |
 | Quota | `codex-limits`, `codex-warm`, `codex-reset` | per-account and pool quota, open usage windows, banked reset credits |
 | Health | `codex-health`, `codex-doctor`, `codex-diag`, `codex-dashboard`, `codex-metrics`, `codex-refresh` | health view, diagnostics plus safe repairs, redacted snapshots, counters |
