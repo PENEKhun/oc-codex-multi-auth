@@ -7,6 +7,16 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.28.0] - 2026-10-06
+
+### Added
+- `codex-enable` (25th registered tool) re-enables a disabled account by index or picker, strips the auto-disable marker, clears its auth-failure cooldown, and reloads the cached manager — concurrent enables serialize through the shared load slot so installs land in commit order, and a rejected in-flight load no longer blocks the reload. `codex-health` and `codex-refresh` accept `includeDisabled` to validate credentials without re-enabling. ([#288](https://github.com/ndycode/oc-codex-multi-auth/issues/288), [#290](https://github.com/ndycode/oc-codex-multi-auth/pull/290))
+
+### Fixed
+- The OAuth `/connect` method now declares its `prompts`, so the host form collects login mode and account count instead of the plugin grabbing stdin under the host TUI (`EALREADY`). A form-driven "start fresh" also clears the flagged store with a cutoff that preserves records another runtime flags mid-login, verifies the keychain entry matches the survivors, and retires only proven-stale migration markers. ([#287](https://github.com/ndycode/oc-codex-multi-auth/issues/287), [#289](https://github.com/ndycode/oc-codex-multi-auth/pull/289))
+- Accounts the plugin disables itself — repeated auth failures or workspace deactivation — now carry an `accountNote` marker that survives persistence and disk merges, so `codex-doctor`, `codex-status`, explainability reasons, and beginner guidance can tell auto-disabled from operator-disabled. A pool where every account is auto-disabled reports `all_accounts_disabled` instead of masquerading as a rate limit, V2 `resolveAuth` no longer selects disabled accounts, and `codex-doctor` notes when the host's own `openai` credential can still serve requests while the whole pool is disabled. ([#288](https://github.com/ndycode/oc-codex-multi-auth/issues/288), [#290](https://github.com/ndycode/oc-codex-multi-auth/pull/290))
+- Cache invalidation now runs before flagged-store cleanup on both fresh paths, so a cleanup failure can no longer leave a stale manager able to debounced-save wiped or pre-fresh members back. ([#289](https://github.com/ndycode/oc-codex-multi-auth/pull/289))
+
 ## [6.27.0] - 2026-10-02
 
 ### Added
