@@ -2223,6 +2223,14 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 		): Promise<void> => {
 			try {
 				await persistAccountPool(results, replaceAll);
+				// "Start fresh" means the whole credential state — the interactive
+				// menu's fresh path clears the flagged store too, so a form-driven
+				// fresh must not leave old flagged refresh tokens recoverable.
+				// Clearing stays deferred like replaceAll: it only runs once a new
+				// account actually landed, never on a cancelled sign-in.
+				if (replaceAll && results.length > 0) {
+					await clearFlaggedAccounts();
+				}
 				invalidateAccountManagerCache();
 			} catch (err) {
 				const storagePath = getStoragePath();
