@@ -247,7 +247,11 @@ export function createCodexEnableTool(ctx: ToolContext): ToolDefinition {
 			const priorLoad: Promise<unknown> =
 				accountManagerPromiseRef.current ?? Promise.resolve();
 			invalidateAccountManagerCache();
-			const reload = priorLoad.then(() => AccountManager.loadFromDisk());
+			// A rejected in-flight load must not block this reload — ordering
+			// matters, not the prior outcome.
+			const reload = priorLoad
+				.catch(() => undefined)
+				.then(() => AccountManager.loadFromDisk());
 			accountManagerPromiseRef.current = reload;
 			try {
 				cachedAccountManagerRef.current = await reload;

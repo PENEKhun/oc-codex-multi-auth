@@ -357,4 +357,31 @@ describe("codex-enable tool", () => {
 
 		expect(vi.mocked(AccountManager.loadFromDisk)).toHaveBeenCalled();
 	});
+
+	it("reloads even when an in-flight prior load already rejected", async () => {
+		const storage = makeStorage([
+			{
+				email: "a@example.com",
+				refreshToken: "r1",
+				addedAt: 1,
+				lastUsed: 1,
+				enabled: false,
+				accountNote: AUTH_FAILURE_DISABLE_NOTE_MARKER,
+			},
+		]);
+		vi.mocked(loadAccounts).mockResolvedValue(storage);
+		stubTransaction(storage);
+
+		const priorLoad = Promise.reject(new Error("stale load failed"));
+		void priorLoad.catch(() => undefined);
+		const ctx = buildCtx();
+		ctx.accountManagerPromiseRef.current = priorLoad;
+		ctx.cachedAccountManagerRef.current = {} as never;
+		const tool = createCodexEnableTool(ctx);
+		const output = (await tool.execute({}, {} as never)) as string;
+
+		expect(vi.mocked(AccountManager.loadFromDisk)).toHaveBeenCalled();
+		expect(output).toContain("Enabled");
+		expect(output).not.toContain("reload failed");
+	});
 });
