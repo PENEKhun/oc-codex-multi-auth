@@ -563,6 +563,50 @@ describe("flagged-store load/save/clear with CODEX_KEYCHAIN", () => {
 		expect(existsSync(flaggedPath)).toBe(false);
 	});
 
+	it("clearFlaggedAccounts leaves the store untouched when the survivor read fails", async () => {
+		// A failed read proves nothing about the contents — a flag another
+		// runtime wrote inside the fresh-login window must not be sent through
+		// the delete path (greptile P1 on PR #289, flagged.ts survivor load).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+
+		const originalReadFile = fs.readFile;
+		const readFile = vi
+			.spyOn(fs, "readFile")
+			.mockImplementation((path: unknown, ...rest: unknown[]) => {
+				if (String(path) === flaggedPath) {
+					const err = new Error("denied") as NodeJS.ErrnoException;
+					err.code = "EACCES";
+					return Promise.reject(err);
+				}
+				return Reflect.apply(originalReadFile, fs, [
+					path,
+					...rest,
+				]) as ReturnType<typeof fs.readFile>;
+			});
+		try {
+			await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+		} finally {
+			readFile.mockRestore();
+		}
+
+		// The clear must have left every record — including the pre-cutoff one —
+		// in place: nothing was provably empty, so nothing may be deleted.
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-1",
+			"acct-flagged-late",
+		]);
+	});
+
 	it("clearFlaggedAccounts retires a stale keychain entry when the survivor save falls back to JSON", async () => {
 		// Under opt-in the survivor save tries the keychain first; when that
 		// write fails the JSON fallback lands but the pre-clear entry keeps the
