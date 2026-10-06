@@ -511,4 +511,38 @@ describe("flagged-store load/save/clear with CODEX_KEYCHAIN", () => {
 		const onDisk = JSON.parse(await fs.readFile(flaggedPath, "utf-8"));
 		expect(onDisk.accounts[0].accountId).toBe("acct-flagged-1");
 	});
+
+	it("clearFlaggedAccounts keeps records flagged at/after the cutoff instead of deleting them", async () => {
+		// A record another runtime flags inside the fresh-login window must
+		// outlive the clear — a blind delete loses a flag the caller's snapshot
+		// never saw (greptile P1 on PR #289, index.ts:2236).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const concurrent = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, concurrent] });
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts).toHaveLength(1);
+		expect(loaded.accounts[0]?.accountId).toBe("acct-flagged-late");
+		expect(existsSync(flaggedPath)).toBe(true);
+	});
+
+	it("clearFlaggedAccounts still deletes the whole store when nothing post-dates the cutoff", async () => {
+		setOptIn(false);
+		await saveFlaggedAccounts(makeFlagged()); // flaggedAt: 3
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		expect(existsSync(flaggedPath)).toBe(false);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts).toHaveLength(0);
+	});
 });

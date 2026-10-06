@@ -2222,6 +2222,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			replaceAll: boolean,
 		): Promise<void> => {
 			try {
+				// Cutoff stamped before the pool commit bounds the fresh wipe: a
+				// record another runtime flags after this point outlives the clear
+				// below instead of being deleted with the pre-fresh set.
+				const freshCutoff = replaceAll ? Date.now() : undefined;
 				await persistAccountPool(results, replaceAll);
 				// "Start fresh" means the whole credential state — the interactive
 				// menu's fresh path clears the flagged store too, so a form-driven
@@ -2229,7 +2233,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				// Clearing stays deferred like replaceAll: it only runs once a new
 				// account actually landed, never on a cancelled sign-in.
 				if (replaceAll && results.length > 0) {
-					await clearFlaggedAccounts();
+					await clearFlaggedAccounts({ keepFlaggedAtOrAfter: freshCutoff });
 				}
 				invalidateAccountManagerCache();
 			} catch (err) {

@@ -522,19 +522,39 @@ export async function saveFlaggedAccounts(storage: FlaggedAccountStorageV1): Pro
  * present so the caller can retry, and the operation stays best-effort
  * (never throws) apart from the test-home guard.
  *
+ * When `options.keepFlaggedAtOrAfter` is given, the handler first inspects
+ * the store under the same lease: records flagged at or after the cutoff
+ * were written by a runtime concurrent with the caller's wipe decision and
+ * outlive it — the clear then degrades to persisting just those survivors
+ * through the normal keychain- and marker-aware save instead of deleting
+ * the store. A blind delete would silently destroy a flag written in the
+ * gap between the caller's snapshot and this lock.
+ *
  * @throws StorageError (code `TEST_HOME_ESCAPE`) - see `clearAccounts`; the
  *   guard refuses the deletion, so absorbing it would report a clear that
  *   deliberately did not happen.
  */
-export async function clearFlaggedAccounts(): Promise<void> {
+export async function clearFlaggedAccounts(options?: {
+  keepFlaggedAtOrAfter?: number;
+}): Promise<void> {
   return withPinnedStorageScope(() =>
     withStorageTransaction({
       // Lease the same file the handler unlinks — pinned so a mid-clear scope
       // flip cannot make the unlink hit a location the lease does not cover.
       storagePath: getFlaggedAccountsPath(),
-      load: () => Promise.resolve({ version: 1 as const, accounts: [] }),
-      persist: () => Promise.resolve(),
-      handler: async () => {
+      load: () => loadFlaggedAccountsUnlocked(saveFlaggedAccountsUnlocked),
+      persist: saveFlaggedAccountsUnlocked,
+      handler: async (current, persist) => {
+        const cutoff = options?.keepFlaggedAtOrAfter;
+        if (typeof cutoff === "number") {
+          const survivors = current.accounts.filter(
+            (account) => account.flaggedAt >= cutoff,
+          );
+          if (survivors.length > 0) {
+            await persist({ version: 1, accounts: survivors });
+            return;
+          }
+        }
         const path = getFlaggedAccountsPath();
         let jsonCleared = true;
         try {
