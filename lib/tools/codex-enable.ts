@@ -239,20 +239,28 @@ export function createCodexEnableTool(ctx: ToolContext): ToolDefinition {
 			// just rewrote. Invalidating retires it through the dispose+flush
 			// path — post-dispose writes merge only volatile fields, so its
 			// stale enabled/accountNote can never come back while fresh
-			// rate-limit evidence is still published.
-			if (cachedAccountManagerRef.current) {
-				invalidateAccountManagerCache();
-				try {
-					const reloadedManager = await AccountManager.loadFromDisk();
-					cachedAccountManagerRef.current = reloadedManager;
-					accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
-				} catch (error) {
-					// The enable already committed; a failed reload only delays the
-					// live pool seeing it — the next account access rebuilds.
-					logWarn(
-						`codex-enable: account enabled on disk but the manager reload failed; the next account access will retry (${error instanceof Error ? error.message : String(error)})`,
-					);
+			// rate-limit evidence is still published. Capture the in-flight
+			// load BEFORE invalidating nulls the slot: the reload chains on it
+			// so a concurrent enable queues behind ours and installs happen in
+			// commit order — the last install is the freshest disk view, never
+			// an older snapshot that still shows this account disabled.
+			const priorLoad: Promise<unknown> =
+				accountManagerPromiseRef.current ?? Promise.resolve();
+			invalidateAccountManagerCache();
+			const reload = priorLoad.then(() => AccountManager.loadFromDisk());
+			accountManagerPromiseRef.current = reload;
+			try {
+				cachedAccountManagerRef.current = await reload;
+			} catch (error) {
+				// The enable already committed; a failed reload only delays the
+				// live pool seeing it — the next account access rebuilds. Drop
+				// the rejected promise so later callers are not chained to it.
+				if (accountManagerPromiseRef.current === reload) {
+					accountManagerPromiseRef.current = null;
 				}
+				logWarn(
+					`codex-enable: account enabled on disk but the manager reload failed; the next account access will retry (${error instanceof Error ? error.message : String(error)})`,
+				);
 			}
 
 			const { label, wasAutoDisabled } = outcome;
