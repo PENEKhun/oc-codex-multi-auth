@@ -6,7 +6,7 @@
  * carry an explicit marker note — distinguishable in diagnostics, stripped
  * on re-enable, preserving operator text around it.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AccountManager } from "../lib/accounts.js";
 import {
@@ -18,6 +18,20 @@ import {
 	stripAutoDisableNote,
 	WORKSPACE_DEACTIVATED_NOTE_MARKER,
 } from "../lib/accounts/state.js";
+import {
+	withAccountStorageTransaction,
+	type AccountStorageV3,
+} from "../lib/storage.js";
+
+vi.mock("../lib/storage.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/storage.js")>();
+	return {
+		...actual,
+		loadAccounts: vi.fn(async () => null),
+		saveAccounts: vi.fn(async () => undefined),
+		withAccountStorageTransaction: vi.fn(),
+	};
+});
 
 const now = Date.now();
 
@@ -205,5 +219,76 @@ describe("auto-disable note helpers", () => {
 		expect(hasAutoDisableNote(WORKSPACE_DEACTIVATED_NOTE_MARKER)).toBe(true);
 		expect(hasAutoDisableNote("operator did this")).toBe(false);
 		expect(hasAutoDisableNote(undefined)).toBe(false);
+	});
+});
+
+describe("auto-disable marker through saveToDisk", () => {
+	function stubTransaction(disk: AccountStorageV3): AccountStorageV3[] {
+		const persisted: AccountStorageV3[] = [];
+		vi.mocked(withAccountStorageTransaction).mockImplementation(
+			async (handler) =>
+				handler(disk, async (storage) => {
+					persisted.push(storage);
+				}),
+		);
+		return persisted;
+	}
+
+	it("writes the in-memory marker onto the disk record when a pending disable lands", async () => {
+		// Disk holds the pre-disable record: no enabled flag, no note. The
+		// pending-disable merge takes the manager's own record for this slot,
+		// so the reason must reach disk, not the old note (review: #290).
+		const persisted = stubTransaction({
+			version: 3,
+			activeIndex: 0,
+			activeIndexByFamily: {},
+			accounts: [
+				{ refreshToken: "rt", accountId: "a1", addedAt: now, lastUsed: now },
+			],
+		});
+		const manager = makeManager([baseAccount({ accountId: "a1" })]);
+		const target = manager.getAccountsSnapshot()[0]!;
+		manager.disableAccountsWithSameRefreshToken(target);
+
+		await manager.saveToDisk();
+
+		expect(persisted).toHaveLength(1);
+		const written = persisted[0]!.accounts[0]!;
+		expect(written.enabled).toBe(false);
+		expect(written.accountNote).toContain(AUTH_FAILURE_DISABLE_NOTE_MARKER);
+	});
+
+	it("lets a disk-side re-enable beat a stale in-memory disable with no pending entry", async () => {
+		// A replacement manager that still holds the disabled snapshot cannot
+		// re-apply it once disk says enabled — for a slot with no pending
+		// disable the merge takes enabled + accountNote from disk (review: #290).
+		const persisted = stubTransaction({
+			version: 3,
+			activeIndex: 0,
+			activeIndexByFamily: {},
+			accounts: [
+				{
+					refreshToken: "rt",
+					accountId: "a1",
+					accountNote: "keep me",
+					addedAt: now,
+					lastUsed: now,
+				},
+			],
+		});
+		const manager = makeManager([
+			baseAccount({
+				accountId: "a1",
+				enabled: false,
+				accountNote: `operator text. ${AUTH_FAILURE_DISABLE_NOTE_MARKER}`,
+			}),
+		]);
+
+		await manager.saveToDisk();
+
+		expect(persisted).toHaveLength(1);
+		const written = persisted[0]!.accounts[0]!;
+		expect(written.enabled).not.toBe(false);
+		expect(written.accountNote).toBe("keep me");
 	});
 });

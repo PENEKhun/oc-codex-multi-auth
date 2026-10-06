@@ -180,11 +180,17 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 		if (allPoolAccountsDisabled) {
 			const hostEntry = await readHostOpenAIOAuth();
 			if (hostEntry) {
+				// Presence does not prove the credential can serve — the access
+				// token may be expired, in which case the host would refresh it
+				// on use. The wording has to hedge both ways, not claim live
+				// traffic (review: #290).
+				const expired = hostEntry.expires <= Date.now();
 				findings.push({
 					severity: "warning",
 					code: "host-oauth-outside-pool",
-					summary:
-						"A host-level OpenAI OAuth credential exists outside the managed pool; requests may still be served by it while every pool account is disabled.",
+					summary: expired
+						? "An expired host-level OpenAI OAuth credential exists outside the managed pool; the host may still refresh it to serve requests while every pool account is disabled."
+						: "A host-level OpenAI OAuth credential exists outside the managed pool; requests may still be served by it while every pool account is disabled.",
 					action:
 						"Re-enable a pool account with `codex-enable` to return traffic to managed rotation, or remove the host credential with `opencode auth logout`.",
 				});
