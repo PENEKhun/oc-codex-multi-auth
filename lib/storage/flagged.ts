@@ -288,6 +288,7 @@ async function loadFlaggedAccountsUnlocked(
         "INVALID_STORAGE",
         path,
         "Restore the flagged accounts from a credential snapshot in the backups directory, or remove the file to start fresh.",
+        error as Error,
       );
     }
   }
@@ -522,19 +523,139 @@ export async function saveFlaggedAccounts(storage: FlaggedAccountStorageV1): Pro
  * present so the caller can retry, and the operation stays best-effort
  * (never throws) apart from the test-home guard.
  *
+ * When `options.keepFlaggedAtOrAfter` is given, the handler first inspects
+ * the store under the same lease: records flagged at or after the cutoff
+ * were written by a runtime concurrent with the caller's wipe decision and
+ * outlive it — the clear then degrades to persisting just those survivors
+ * through the normal keychain- and marker-aware save instead of deleting
+ * the store. A blind delete would silently destroy a flag written in the
+ * gap between the caller's snapshot and this lock.
+ *
  * @throws StorageError (code `TEST_HOME_ESCAPE`) - see `clearAccounts`; the
  *   guard refuses the deletion, so absorbing it would report a clear that
  *   deliberately did not happen.
  */
-export async function clearFlaggedAccounts(): Promise<void> {
+export async function clearFlaggedAccounts(options?: {
+  keepFlaggedAtOrAfter?: number;
+}): Promise<void> {
   return withPinnedStorageScope(() =>
     withStorageTransaction({
       // Lease the same file the handler unlinks — pinned so a mid-clear scope
       // flip cannot make the unlink hit a location the lease does not cover.
       storagePath: getFlaggedAccountsPath(),
-      load: () => Promise.resolve({ version: 1 as const, accounts: [] }),
-      persist: () => Promise.resolve(),
-      handler: async () => {
+      // The survivor check uses the shared load — keychain copy, canonical
+      // JSON, migration-marker and legacy fallbacks — because under keychain
+      // opt-in the canonical file is legitimately absent while the data
+      // lives on the other sides. Error classification decides what happens
+      // next: damaged content (parse/shape failure, no surviving I/O errno)
+      // means the bytes were seen and cannot be our format — the delete
+      // below is also its only clear — while a failed READ proves nothing
+      // about the contents and must not send a concurrently written flag
+      // through the delete path. `null` tells the handler to leave the
+      // store untouched.
+      load: async (): Promise<FlaggedAccountStorageV1 | null> => {
+        if (typeof options?.keepFlaggedAtOrAfter !== "number") {
+          return { version: 1 as const, accounts: [] };
+        }
+        try {
+          return await loadFlaggedAccountsUnlocked(saveFlaggedAccountsUnlocked);
+        } catch (error) {
+          if (
+            error instanceof StorageError &&
+            error.code === TEST_HOME_ESCAPE_CODE
+          ) {
+            throw error;
+          }
+          const cause = error instanceof Error ? error.cause : undefined;
+          const causeErrno =
+            cause instanceof Error
+              ? (cause as NodeJS.ErrnoException).code
+              : undefined;
+          const isDamagedStore =
+            cause instanceof SyntaxError ||
+            (error instanceof StorageError &&
+              error.code === "INVALID_STORAGE" &&
+              typeof causeErrno !== "string");
+          if (isDamagedStore) {
+            // Malformed content has no identifiable survivors — matching the
+            // long-standing clear semantics for a store that can never be
+            // read back.
+            return { version: 1 as const, accounts: [] };
+          }
+          log.warn(
+            "flagged survivor check could not read the store; leaving it untouched for a later clear",
+            { error: String(error) },
+          );
+          return null;
+        }
+      },
+      persist: saveFlaggedAccountsUnlocked,
+      handler: async (current, persist) => {
+        if (current === null) return;
+        const cutoff = options?.keepFlaggedAtOrAfter;
+        if (typeof cutoff === "number") {
+          const survivors = current.accounts.filter(
+            (account) => account.flaggedAt >= cutoff,
+          );
+          if (survivors.length > 0) {
+            await persist({ version: 1, accounts: survivors });
+            const expected = JSON.stringify(
+              normalizeFlaggedStorage({ version: 1, accounts: survivors }),
+              null,
+              2,
+            );
+            // The save mirrors the keychain only on a successful write; a
+            // failed or refused write leaves the pre-clear entry holding the
+            // OLD flagged set, and a keychain-first load would resurrect it
+            // over the survivor file. Verify the entry matches the survivor
+            // blob and retire it when it does not.
+            if (isKeychainOptInEnabled()) {
+              const projectKey = getCurrentProjectStorageKey();
+              const live = await readFlaggedFromKeychain(projectKey);
+              if (live !== null && live !== expected) {
+                const result = await deleteFlaggedFromKeychain(projectKey);
+                if (!result.deleted && result.error) {
+                  log.error(
+                    "keychain: failed to retire the pre-clear flagged entry; it still holds the wiped set. Remove the keychain entry manually.",
+                    { error: result.error },
+                  );
+                }
+              }
+            }
+            // Retire only markers that do NOT match the survivor blob — a
+            // marker refreshed by the save is the designed opt-out and
+            // interrupted-migration fallback; deleting it would leave the
+            // survivors with no on-disk recovery copy. A marker that cannot
+            // be read is NOT exempt: it may still hold the pre-fresh flagged
+            // set, and the loader would happily recover from it — attempt
+            // removal rather than silently keep a plaintext token copy.
+            for (const markerPath of await listKeychainMigrationMarkers(
+              getFlaggedAccountsPath(),
+            )) {
+              let markerContent: string | null = null;
+              try {
+                markerContent = (
+                  await fs.readFile(markerPath, "utf-8")
+                ).replace(/^\uFEFF/, "");
+              } catch {
+                markerContent = null;
+              }
+              if (markerContent !== null && markerContent === expected) {
+                continue;
+              }
+              try {
+                await fs.unlink(markerPath);
+                await fsyncParentDirectory(markerPath);
+              } catch (error) {
+                log.error(
+                  "keychain: a pre-fresh flagged migration marker survived the clear; remove it manually",
+                  { marker: markerPath, error: String(error) },
+                );
+              }
+            }
+            return;
+          }
+        }
         const path = getFlaggedAccountsPath();
         let jsonCleared = true;
         try {

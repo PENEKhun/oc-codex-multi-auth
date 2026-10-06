@@ -875,6 +875,30 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(plugin.auth.methods[3].label).toBe("Codex OAuth (Manual URL Paste)");
 		});
 
+		it("primary OAuth method declares prompts so the host renders the form instead of the plugin reading stdin", () => {
+			// Regression guard for #287: without `prompts`, authorize() receives
+			// no inputs and falls back to the plugin's stdin menu, which collides
+			// with the host TUI's stdin ownership (EALREADY).
+			const method = plugin.auth.methods[0] as unknown as {
+				prompts?: Array<{
+					type: string;
+					key: string;
+					options?: Array<{ value: string }>;
+				}>;
+			};
+			const byKey = new Map((method.prompts ?? []).map((prompt) => [prompt.key, prompt]));
+
+			const loginMode = byKey.get("loginMode");
+			expect(loginMode?.type).toBe("select");
+			expect(loginMode?.options?.map((option) => option.value)).toEqual(
+				expect.arrayContaining(["add", "fresh"]),
+			);
+
+			const accountCount = byKey.get("accountCount");
+			expect(accountCount?.type).toBe("select");
+			expect(accountCount?.options?.map((option) => option.value)).toEqual(["1", "2", "3"]);
+		});
+
 		it("noBrowser input returns the paste flow instead of launching a browser", async () => {
 			// Programmatic input from a headless caller or script. Ignoring it
 			// would enter the multi-account loop, try to launch a browser, and
@@ -8569,6 +8593,85 @@ describe("OpenAIOAuthPlugin persistAccountPool", () => {
 				}),
 			]),
 		);
+	});
+
+	it("clears the flagged store when a form-driven start fresh replaces the pool", async () => {
+		const authModule = await import("../lib/auth/auth.js");
+		const storageModule = await import("../lib/storage.js");
+
+		mockStorage.accounts = [
+			{ refreshToken: "old-r1", email: "old@example.com", accountId: "old-acc" },
+		];
+		mockFlaggedStorage.accounts = [
+			{
+				refreshToken: "flagged-refresh",
+				accountId: "flagged-acc",
+				flaggedAt: Date.now() - 1000,
+				flaggedReason: "token-invalid",
+			},
+		];
+		vi.mocked(authModule.exchangeAuthorizationCode).mockResolvedValueOnce({
+			type: "success",
+			access: "fresh-access",
+			refresh: "fresh-refresh",
+			expires: Date.now() + 300_000,
+			idToken: "fresh-id",
+		});
+
+		const mockClient = createMockClient();
+		const { OpenAIOAuthPlugin } = await import("../index.js");
+		const plugin = (await OpenAIOAuthPlugin({
+			client: mockClient,
+		} as never)) as unknown as PluginType;
+		const autoMethod = plugin.auth.methods[0] as unknown as {
+			authorize: (inputs?: Record<string, string>) => Promise<{ instructions: string }>;
+		};
+
+		await autoMethod.authorize({ loginMode: "fresh", accountCount: "1" });
+
+		// The menu's fresh path wipes the flagged store too — a form-driven
+		// fresh must not leave old flagged refresh tokens recoverable.
+		expect(mockStorage.accounts).toHaveLength(1);
+		expect(mockStorage.accounts[0]?.refreshToken).toBe("fresh-refresh");
+		expect(vi.mocked(storageModule.clearFlaggedAccounts)).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the flagged store when the form adds rather than starting fresh", async () => {
+		const authModule = await import("../lib/auth/auth.js");
+		const storageModule = await import("../lib/storage.js");
+
+		mockStorage.accounts = [
+			{ refreshToken: "old-r1", email: "old@example.com", accountId: "old-acc" },
+		];
+		mockFlaggedStorage.accounts = [
+			{
+				refreshToken: "flagged-refresh",
+				accountId: "flagged-acc",
+				flaggedAt: Date.now() - 1000,
+				flaggedReason: "token-invalid",
+			},
+		];
+		vi.mocked(authModule.exchangeAuthorizationCode).mockResolvedValueOnce({
+			type: "success",
+			access: "add-access",
+			refresh: "add-refresh",
+			expires: Date.now() + 300_000,
+			idToken: "add-id",
+		});
+
+		const mockClient = createMockClient();
+		const { OpenAIOAuthPlugin } = await import("../index.js");
+		const plugin = (await OpenAIOAuthPlugin({
+			client: mockClient,
+		} as never)) as unknown as PluginType;
+		const autoMethod = plugin.auth.methods[0] as unknown as {
+			authorize: (inputs?: Record<string, string>) => Promise<{ instructions: string }>;
+		};
+
+		await autoMethod.authorize({ loginMode: "add", accountCount: "1" });
+
+		expect(mockStorage.accounts).toHaveLength(2);
+		expect(vi.mocked(storageModule.clearFlaggedAccounts)).not.toHaveBeenCalled();
 	});
 });
 

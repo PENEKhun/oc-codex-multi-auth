@@ -174,6 +174,7 @@ import {
 	type FlaggedAccountMetadataV1,
 } from "./lib/storage.js";
 import { getWorkspaceIdentityKey } from "./lib/storage/identity.js";
+import { TEST_HOME_ESCAPE_CODE } from "./lib/storage/test-home-guard.js";
 import {
 	createCodexHeaders,
 	extractRequestUrl,
@@ -2222,8 +2223,43 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			replaceAll: boolean,
 		): Promise<void> => {
 			try {
+				// Cutoff stamped before the pool commit bounds the fresh wipe: a
+				// record another runtime flags after this point outlives the clear
+				// below instead of being deleted with the pre-fresh set.
+				const freshCutoff = replaceAll ? Date.now() : undefined;
 				await persistAccountPool(results, replaceAll);
+				// The pool is committed — invalidate before the flagged cleanup
+				// so a cleanup failure cannot leave a stale manager whose
+				// debounced save appends pre-fresh members back into the pool.
 				invalidateAccountManagerCache();
+				// "Start fresh" means the whole credential state — the interactive
+				// menu's fresh path clears the flagged store too, so a form-driven
+				// fresh must not leave old flagged refresh tokens recoverable.
+				// Clearing stays deferred like replaceAll: it only runs once a new
+				// account actually landed, never on a cancelled sign-in.
+				if (replaceAll && results.length > 0) {
+					try {
+						await clearFlaggedAccounts({ keepFlaggedAtOrAfter: freshCutoff });
+					} catch (clearErr) {
+						// The test-home guard must keep failing a run that
+						// escaped its sandbox — never downgrade it to a toast.
+						if (
+							clearErr instanceof StorageError &&
+							clearErr.code === TEST_HOME_ESCAPE_CODE
+						) {
+							throw clearErr;
+						}
+						// The pool commit already succeeded — a flagged-clear
+						// failure is a cleanup warning, not a persistence failure.
+						logWarn(
+							`[${PLUGIN_NAME}] Fresh login saved, but clearing flagged accounts failed: ${(clearErr as Error)?.message ?? String(clearErr)}`,
+						);
+						await showToast(
+							"Account saved; old flagged accounts could not be cleared.",
+							"warning",
+						);
+					}
+				}
 			} catch (err) {
 				const storagePath = getStoragePath();
 				const errorCode = (err as NodeJS.ErrnoException)?.code || "UNKNOWN";
@@ -4613,6 +4649,40 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					{
 						label: AUTH_LABELS.OAUTH,
 						type: "oauth" as const,
+						// Without prompts the host collects no inputs and authorize()
+						// falls back to the plugin's own stdin menu — which collides
+						// with the TUI's stdin ownership (EALREADY) and can wedge the
+						// prompt input. Declaring them lets the host render the form
+						// and pass loginMode/accountCount straight into authorize().
+						prompts: [
+							{
+								type: "select",
+								key: "loginMode",
+								message: "Codex account action",
+								options: [
+									{
+										label: "Add account",
+										value: "add",
+										hint: "Sign in and append to the existing pool",
+									},
+									{
+										label: "Start fresh (replace pool)",
+										value: "fresh",
+										hint: "First successful sign-in replaces all saved accounts",
+									},
+								],
+							},
+							{
+								type: "select",
+								key: "accountCount",
+								message: "How many accounts to add",
+								options: [
+									{ label: "1", value: "1" },
+									{ label: "2", value: "2" },
+									{ label: "3", value: "3" },
+								],
+							},
+						],
 						authorize: async (inputs?: Record<string, string>) => {
 							const authPluginConfig = loadPluginConfig();
 							applyUiRuntimeFromConfig(authPluginConfig);

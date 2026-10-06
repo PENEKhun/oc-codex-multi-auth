@@ -511,4 +511,182 @@ describe("flagged-store load/save/clear with CODEX_KEYCHAIN", () => {
 		const onDisk = JSON.parse(await fs.readFile(flaggedPath, "utf-8"));
 		expect(onDisk.accounts[0].accountId).toBe("acct-flagged-1");
 	});
+
+	it("clearFlaggedAccounts keeps records flagged at/after the cutoff instead of deleting them", async () => {
+		// A record another runtime flags inside the fresh-login window must
+		// outlive the clear — a blind delete loses a flag the caller's snapshot
+		// never saw (greptile P1 on PR #289, index.ts:2236).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const concurrent = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, concurrent] });
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts).toHaveLength(1);
+		expect(loaded.accounts[0]?.accountId).toBe("acct-flagged-late");
+		expect(existsSync(flaggedPath)).toBe(true);
+	});
+
+	it("clearFlaggedAccounts still deletes the whole store when nothing post-dates the cutoff", async () => {
+		setOptIn(false);
+		await saveFlaggedAccounts(makeFlagged()); // flaggedAt: 3
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		expect(existsSync(flaggedPath)).toBe(false);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts).toHaveLength(0);
+	});
+
+	it("clearFlaggedAccounts clears a damaged store instead of blocking on the survivor load", async () => {
+		// The survivor check reads the file the delete would unlink; a malformed
+		// store has no identifiable survivors and must not stall the clear
+		// (greptile P1 on PR #289 — the previous load was a stub that never
+		// parsed the file).
+		setOptIn(false);
+		await fs.writeFile(flaggedPath, "{ not json", {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+
+		await expect(
+			clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 }),
+		).resolves.toBeUndefined();
+		expect(existsSync(flaggedPath)).toBe(false);
+	});
+
+	it("clearFlaggedAccounts leaves the store untouched when the survivor read fails", async () => {
+		// A failed read proves nothing about the contents — a flag another
+		// runtime wrote inside the fresh-login window must not be sent through
+		// the delete path (greptile P1 on PR #289, flagged.ts survivor load).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+
+		const originalReadFile = fs.readFile;
+		const readFile = vi
+			.spyOn(fs, "readFile")
+			.mockImplementation((path: unknown, ...rest: unknown[]) => {
+				if (String(path) === flaggedPath) {
+					const err = new Error("denied") as NodeJS.ErrnoException;
+					err.code = "EACCES";
+					return Promise.reject(err);
+				}
+				return Reflect.apply(originalReadFile, fs, [
+					path,
+					...rest,
+				]) as ReturnType<typeof fs.readFile>;
+			});
+		try {
+			await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+		} finally {
+			readFile.mockRestore();
+		}
+
+		// The clear must have left every record — including the pre-cutoff one —
+		// in place: nothing was provably empty, so nothing may be deleted.
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-1",
+			"acct-flagged-late",
+		]);
+	});
+
+	it("clearFlaggedAccounts removes a migration marker it cannot read", async () => {
+		// An unreadable marker may still hold the pre-fresh flagged set and the
+		// loader would recover from it — it must be removed, not kept on the
+		// "not proven stale" theory (greptile P1 on PR #289).
+		setOptIn(false);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+		const markerPath = `${flaggedPath}.migrated-to-keychain.111`;
+		await fs.writeFile(markerPath, JSON.stringify(base), {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+
+		const originalReadFile = fs.readFile;
+		const readFile = vi
+			.spyOn(fs, "readFile")
+			.mockImplementation((path: unknown, ...rest: unknown[]) => {
+				if (String(path) === markerPath) {
+					const err = new Error("denied") as NodeJS.ErrnoException;
+					err.code = "EACCES";
+					return Promise.reject(err);
+				}
+				return Reflect.apply(originalReadFile, fs, [
+					path,
+					...rest,
+				]) as ReturnType<typeof fs.readFile>;
+			});
+		try {
+			await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+		} finally {
+			readFile.mockRestore();
+		}
+
+		expect(existsSync(markerPath)).toBe(false);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-late",
+		]);
+	});
+
+	it("clearFlaggedAccounts retires a stale keychain entry when the survivor save falls back to JSON", async () => {
+		// Under opt-in the survivor save tries the keychain first; when that
+		// write fails the JSON fallback lands but the pre-clear entry keeps the
+		// OLD flagged set — a keychain-first load would resurrect it over the
+		// survivor file (greptile P1 on PR #289, flagged.ts survivor branch).
+		setOptIn(true);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+		expect(
+			mock.store.get(`${KEYCHAIN_SERVICE_NAME}::${FLAGGED_KEYCHAIN_KEY}`),
+		).toBeDefined();
+		mock.setShouldThrow = true;
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		expect(
+			mock.store.get(`${KEYCHAIN_SERVICE_NAME}::${FLAGGED_KEYCHAIN_KEY}`),
+		).toBeUndefined();
+		// Pre-fresh plaintext must not linger in migration markers either.
+		const markers = (await fs.readdir(storageDir)).filter((name) =>
+			name.includes(".migrated-to-keychain."),
+		);
+		expect(markers).toHaveLength(0);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-late",
+		]);
+	});
 });
