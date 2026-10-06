@@ -4613,6 +4613,40 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					{
 						label: AUTH_LABELS.OAUTH,
 						type: "oauth" as const,
+						// Without prompts the host collects no inputs and authorize()
+						// falls back to the plugin's own stdin menu — which collides
+						// with the TUI's stdin ownership (EALREADY) and can wedge the
+						// prompt input. Declaring them lets the host render the form
+						// and pass loginMode/accountCount straight into authorize().
+						prompts: [
+							{
+								type: "select",
+								key: "loginMode",
+								message: "Codex account action",
+								options: [
+									{
+										label: "Add account",
+										value: "add",
+										hint: "Sign in and append to the existing pool",
+									},
+									{
+										label: "Start fresh (replace pool)",
+										value: "fresh",
+										hint: "First successful sign-in replaces all saved accounts",
+									},
+								],
+							},
+							{
+								type: "select",
+								key: "accountCount",
+								message: "How many accounts to add",
+								options: [
+									{ label: "1", value: "1" },
+									{ label: "2", value: "2" },
+									{ label: "3", value: "3" },
+								],
+							},
+						],
 						authorize: async (inputs?: Record<string, string>) => {
 							const authPluginConfig = loadPluginConfig();
 							applyUiRuntimeFromConfig(authPluginConfig);

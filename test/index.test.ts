@@ -875,6 +875,32 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(plugin.auth.methods[3].label).toBe("Codex OAuth (Manual URL Paste)");
 		});
 
+		it("primary OAuth method declares prompts so the host renders the form instead of the plugin reading stdin", () => {
+			// Regression guard for #287: without `prompts`, authorize() receives
+			// no inputs and falls back to the plugin's stdin menu, which collides
+			// with the host TUI's stdin ownership (EALREADY).
+			const method = plugin.auth.methods[0] as unknown as {
+				prompts?: Array<{
+					type: string;
+					key: string;
+					options?: Array<{ value: string }>;
+				}>;
+			};
+			const byKey = new Map((method.prompts ?? []).map((prompt) => [prompt.key, prompt]));
+
+			const loginMode = byKey.get("loginMode");
+			expect(loginMode?.type).toBe("select");
+			expect(loginMode?.options?.map((option) => option.value)).toEqual(
+				expect.arrayContaining(["add", "fresh"]),
+			);
+
+			const accountCount = byKey.get("accountCount");
+			expect(accountCount?.type).toBe("select");
+			expect(
+				accountCount?.options?.every((option) => Number.parseInt(option.value, 10) >= 1),
+			).toBe(true);
+		});
+
 		it("noBrowser input returns the paste flow instead of launching a browser", async () => {
 			// Programmatic input from a headless caller or script. Ignoring it
 			// would enter the multi-account loop, try to launch a browser, and
