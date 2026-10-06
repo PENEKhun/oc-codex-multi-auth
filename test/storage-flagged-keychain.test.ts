@@ -545,4 +545,57 @@ describe("flagged-store load/save/clear with CODEX_KEYCHAIN", () => {
 		const loaded = await loadFlaggedAccounts();
 		expect(loaded.accounts).toHaveLength(0);
 	});
+
+	it("clearFlaggedAccounts clears a damaged store instead of blocking on the survivor load", async () => {
+		// The survivor check reads the file the delete would unlink; a malformed
+		// store has no identifiable survivors and must not stall the clear
+		// (greptile P1 on PR #289 — the previous load was a stub that never
+		// parsed the file).
+		setOptIn(false);
+		await fs.writeFile(flaggedPath, "{ not json", {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+
+		await expect(
+			clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 }),
+		).resolves.toBeUndefined();
+		expect(existsSync(flaggedPath)).toBe(false);
+	});
+
+	it("clearFlaggedAccounts retires a stale keychain entry when the survivor save falls back to JSON", async () => {
+		// Under opt-in the survivor save tries the keychain first; when that
+		// write fails the JSON fallback lands but the pre-clear entry keeps the
+		// OLD flagged set — a keychain-first load would resurrect it over the
+		// survivor file (greptile P1 on PR #289, flagged.ts survivor branch).
+		setOptIn(true);
+		const base = makeFlagged();
+		base.accounts[0]!.flaggedAt = 100;
+		const late = {
+			...base.accounts[0]!,
+			accountId: "acct-flagged-late",
+			refreshToken: "late-flagged-refresh-token-redacted",
+			flaggedAt: 5000,
+		};
+		await saveFlaggedAccounts({ version: 1, accounts: [base.accounts[0]!, late] });
+		expect(
+			mock.store.get(`${KEYCHAIN_SERVICE_NAME}::${FLAGGED_KEYCHAIN_KEY}`),
+		).toBeDefined();
+		mock.setShouldThrow = true;
+
+		await clearFlaggedAccounts({ keepFlaggedAtOrAfter: 1000 });
+
+		expect(
+			mock.store.get(`${KEYCHAIN_SERVICE_NAME}::${FLAGGED_KEYCHAIN_KEY}`),
+		).toBeUndefined();
+		// Pre-fresh plaintext must not linger in migration markers either.
+		const markers = (await fs.readdir(storageDir)).filter((name) =>
+			name.includes(".migrated-to-keychain."),
+		);
+		expect(markers).toHaveLength(0);
+		const loaded = await loadFlaggedAccounts();
+		expect(loaded.accounts.map((a) => a.accountId)).toEqual([
+			"acct-flagged-late",
+		]);
+	});
 });

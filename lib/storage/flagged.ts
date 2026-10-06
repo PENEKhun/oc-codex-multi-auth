@@ -542,7 +542,22 @@ export async function clearFlaggedAccounts(options?: {
       // Lease the same file the handler unlinks — pinned so a mid-clear scope
       // flip cannot make the unlink hit a location the lease does not cover.
       storagePath: getFlaggedAccountsPath(),
-      load: () => loadFlaggedAccountsUnlocked(saveFlaggedAccountsUnlocked),
+      load: async () => {
+        if (typeof options?.keepFlaggedAtOrAfter !== "number") {
+          return { version: 1 as const, accounts: [] };
+        }
+        try {
+          return await loadFlaggedAccountsUnlocked(saveFlaggedAccountsUnlocked);
+        } catch (error) {
+          // An unreadable store yields no identifiable survivors — fall
+          // through to the delete so a damaged file cannot block the clear.
+          log.warn(
+            "flagged survivor check could not read the store; proceeding with the clear",
+            { error: String(error) },
+          );
+          return { version: 1 as const, accounts: [] };
+        }
+      },
       persist: saveFlaggedAccountsUnlocked,
       handler: async (current, persist) => {
         const cutoff = options?.keepFlaggedAtOrAfter;
@@ -552,6 +567,41 @@ export async function clearFlaggedAccounts(options?: {
           );
           if (survivors.length > 0) {
             await persist({ version: 1, accounts: survivors });
+            // The save mirrors the keychain only on a successful write; a
+            // failed or refused write leaves the pre-clear entry holding the
+            // OLD flagged set, and a keychain-first load would resurrect it
+            // over the survivor file. Verify the entry matches the survivor
+            // blob and retire it when it does not.
+            if (isKeychainOptInEnabled()) {
+              const projectKey = getCurrentProjectStorageKey();
+              const expected = JSON.stringify(
+                normalizeFlaggedStorage({ version: 1, accounts: survivors }),
+                null,
+                2,
+              );
+              const live = await readFlaggedFromKeychain(projectKey);
+              if (live !== null && live !== expected) {
+                const result = await deleteFlaggedFromKeychain(projectKey);
+                if (!result.deleted && result.error) {
+                  log.error(
+                    "keychain: failed to retire the pre-clear flagged entry; it still holds the wiped set. Remove the keychain entry manually.",
+                    { error: result.error },
+                  );
+                }
+              }
+            }
+            // Migration markers beside the survivor file can still hold the
+            // pre-fresh flagged set — the same plaintext the delete path
+            // retires. The canonical file is correct either way, so a
+            // stranded marker is logged for manual cleanup, not thrown.
+            try {
+              await retireKeychainMigrationArtifacts(getFlaggedAccountsPath());
+            } catch (error) {
+              log.error(
+                "Failed to retire flagged migration artifacts after a survivor clear; pre-fresh tokens may remain beside the store. Remove them manually.",
+                { error: String(error) },
+              );
+            }
             return;
           }
         }
