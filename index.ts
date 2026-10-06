@@ -5478,8 +5478,12 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										startFresh = true;
 										if (menuResult.deleteAll) {
 											await clearAccounts();
-											await clearFlaggedAccounts();
+											// Invalidate before the flagged
+											// cleanup: a clear throw must not
+											// leave a stale manager able to
+											// debounced-save the wiped pool back.
 											invalidateAccountManagerCache();
+											await clearFlaggedAccounts();
 											console.log("\nDeleted all accounts. Starting fresh.\n");
 										}
 										break;
