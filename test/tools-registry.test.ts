@@ -28,6 +28,7 @@ const EXPECTED_TOOL_NAMES = [
 	"codex-note",
 	"codex-dashboard",
 	"codex-health",
+	"codex-enable",
 	"codex-remove",
 	"codex-refresh",
 	"codex-export",
@@ -49,7 +50,7 @@ describe("createToolRegistry", () => {
 		expect(Object.keys(registry).sort()).toEqual(
 			[...EXPECTED_TOOL_NAMES].sort(),
 		);
-		expect(Object.keys(registry)).toHaveLength(24);
+		expect(Object.keys(registry)).toHaveLength(25);
 	});
 
 	it("returns a well-formed ToolDefinition for every registered tool", () => {

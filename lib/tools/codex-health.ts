@@ -47,13 +47,22 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 				.boolean()
 				.optional()
 				.describe(TOOL_INCLUDE_SENSITIVE_DESCRIPTION),
+			includeDisabled: tool.schema
+				.boolean()
+				.optional()
+				.describe(
+					"Also validate the retained credentials of disabled accounts. " +
+						"Validation is not re-enable — a verified account stays disabled until re-enabled with codex-enable.",
+				),
 		},
 		async execute({
 			format,
 			includeSensitive,
+			includeDisabled,
 		}: {
 			format?: string;
 			includeSensitive?: boolean;
+			includeDisabled?: boolean;
 		} = {}) {
 			const ui = resolveUiRuntime();
 			const maskEmail = resolveMaskEmail();
@@ -112,7 +121,9 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 					maskEmail,
 					peerAccounts: storage.accounts,
 				});
-				const outcome = await refreshAndPersistAccount(input);
+				const outcome = await refreshAndPersistAccount(input, {
+					includeDisabled: includeDisabled === true,
+				});
 
 				if (outcome.status === "refreshed") {
 					jsonAccounts.push({
@@ -123,9 +134,12 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							peerAccounts: storage.accounts,
 						}),
 						status: "healthy",
+						disabled: account.enabled === false,
 					});
 					results.push(
-						`  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy`,
+						account.enabled === false
+							? `  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy (disabled — re-enable with \`codex-enable\`)`
+							: `  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy`,
 					);
 					healthyCount++;
 				} else if (outcome.status === "skipped") {
@@ -137,6 +151,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							peerAccounts: storage.accounts,
 						}),
 						status: "skipped",
+						disabled: true,
 						error: "Account is disabled",
 					});
 					results.push(
@@ -152,13 +167,14 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							peerAccounts: storage.accounts,
 						}),
 						status: "unhealthy",
+						disabled: account.enabled === false,
 						// Upstream error bodies are masked + truncated before they reach
 						// tool output — raw refresh failures can carry credential-shaped
 						// fragments or emails.
 						error: sanitizeToolErrorMessage(outcome.error),
 					});
 					results.push(
-						`  ${getStatusMarker(ui, "error")} ${displayLabel}: ${sanitizeToolErrorMessage(outcome.error)}`,
+						`  ${getStatusMarker(ui, "error")} ${displayLabel}: ${sanitizeToolErrorMessage(outcome.error)}${account.enabled === false ? " (disabled)" : ""}`,
 					);
 					unhealthyCount++;
 				}
@@ -170,6 +186,11 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 			results.push(
 				`Summary: ${healthyCount} healthy, ${unhealthyCount} unhealthy, ${skippedCount} skipped`,
 			);
+			if (skippedCount > 0 && includeDisabled !== true) {
+				results.push(
+					`Hint: ${skippedCount} disabled account(s) were not validated. Re-run with includeDisabled=true to check their retained credentials.`,
+				);
+			}
 
 			// Surface recoverable stale state and disabled token-source duplicates
 			// (issue #171). Token verification is destructive to single-use refresh

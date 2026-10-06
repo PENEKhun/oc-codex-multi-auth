@@ -20,7 +20,13 @@ import { createLogger } from "../logger.js";
 import { CodexCliAccountsSchema } from "../schemas.js";
 import { nowMs } from "../utils.js";
 import type { AccountPersistence } from "./persistence.js";
-import type { AccountState, ManagedAccount } from "./state.js";
+import {
+	appendAutoDisableNote,
+	AUTH_FAILURE_DISABLE_NOTE_MARKER,
+	WORKSPACE_DEACTIVATED_NOTE_MARKER,
+	type AccountState,
+	type ManagedAccount,
+} from "./state.js";
 import { getWorkspaceIdentityKey } from "../storage/identity.js";
 
 const log = createLogger("accounts");
@@ -295,12 +301,22 @@ export class AccountRecovery {
 		this.state.authFailuresByRefreshToken.delete(account.refreshToken);
 	}
 
-	/** Keep credentials available for re-login when a shared refresh token fails. */
+	/**
+	 * Keep credentials available for re-login when a shared refresh token fails.
+	 * The disable carries the plugin's own attribution note: a bare
+	 * `enabled: false` reads as operator intent everywhere (load/repair paths,
+	 * status, doctor), which made auto-disabled accounts indistinguishable
+	 * from deliberate ones (#288).
+	 */
 	disableAccountsWithSameRefreshToken(account: ManagedAccount): number {
 		let disabled = 0;
 		for (const candidate of this.state.accounts) {
 			if (candidate.refreshToken === account.refreshToken && candidate.enabled !== false) {
 				candidate.enabled = false;
+				candidate.accountNote = appendAutoDisableNote(
+					candidate.accountNote,
+					AUTH_FAILURE_DISABLE_NOTE_MARKER,
+				);
 				this.persistence.markAccountDisabled(candidate);
 				disabled++;
 			}
@@ -315,6 +331,10 @@ export class AccountRecovery {
 		for (const candidate of this.state.accounts) {
 			if (getWorkspaceIdentityKey(candidate) === targetKey && candidate.enabled !== false) {
 				candidate.enabled = false;
+				candidate.accountNote = appendAutoDisableNote(
+					candidate.accountNote,
+					WORKSPACE_DEACTIVATED_NOTE_MARKER,
+				);
 				this.persistence.markAccountDisabled(candidate);
 				disabled++;
 			}

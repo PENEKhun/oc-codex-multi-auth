@@ -345,13 +345,24 @@ async function setupScopedV2(
 
 		const resolveAuth = async (): Promise<Auth> => {
 			const pool = await loadAccounts();
-			const account = pool?.accounts[pool.activeIndex] ?? pool?.accounts[0];
+			const accounts = pool?.accounts ?? [];
+			// Disabled accounts never serve requests — prefer the active seat
+			// when enabled, else the first enabled account; the host's own
+			// `openai` connection is the documented outside-pool fallback.
+			const active = pool ? accounts[pool.activeIndex] : undefined;
+			const account =
+				active && active.enabled !== false
+					? active
+					: accounts.find((candidate) => candidate.enabled !== false);
 			if (account?.refreshToken) {
 				return { type: "oauth", access: account.accessToken ?? "", refresh: account.refreshToken, expires: account.expiresAt ?? 0 };
 			}
 			const connection = await context.integration.connection.active("openai");
 			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
 			if (credential?.type === "oauth") return credential;
+			if (accounts.length > 0 && accounts.every((entry) => entry.enabled === false)) {
+				throw new Error("All pooled Codex accounts are disabled — re-enable one with the codex-enable tool or connect a new login with /connect");
+			}
 			throw new Error("Connect a Codex multi-account OAuth method with /connect first");
 		};
 

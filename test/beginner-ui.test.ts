@@ -173,6 +173,42 @@ describe("buildBeginnerDoctorFindings", () => {
 		expect(findings.some((f) => f.code === "prompt-cache-missing")).toBe(false);
 		expect(findings.some((f) => f.code === "prompt-cache-inconsistent")).toBe(false);
 	});
+
+	it("reads an auto-disabled pool as validate-then-enable, not operator intent (#288)", () => {
+		const findings = buildBeginnerDoctorFindings({
+			accounts: [
+				buildAccount({
+					enabled: false,
+					disabledReason: "disabled:auth-failures",
+				}),
+			],
+			now,
+			runtime: healthyRuntime,
+		});
+		const disabled = findings.find((f) => f.code === "disabled-accounts");
+
+		expect(disabled?.severity).toBe("error");
+		expect(disabled?.summary).toContain("disabled automatically");
+		expect(disabled?.action).toContain("codex-health includeDisabled=true");
+		expect(disabled?.action).toContain("codex-enable");
+	});
+
+	it("keeps operator-disable wording for a bare disabled account", () => {
+		const findings = buildBeginnerDoctorFindings({
+			accounts: [
+				buildAccount({ enabled: false, disabledReason: "disabled" }),
+				buildAccount({ index: 1, isActive: false }),
+			],
+			now,
+			runtime: healthyRuntime,
+		});
+		const disabled = findings.find((f) => f.code === "disabled-accounts");
+
+		expect(disabled?.severity).toBe("warning");
+		expect(disabled?.summary).toBe("1 account(s) are disabled.");
+		expect(disabled?.action).toContain("codex-enable");
+		expect(disabled?.action).not.toContain("includeDisabled");
+	});
 });
 
 describe("recommendBeginnerNextAction", () => {
@@ -211,6 +247,32 @@ describe("recommendBeginnerNextAction", () => {
 			runtime: healthyRuntime,
 		});
 		expect(action).toContain("codex-label");
+	});
+
+	it("points an all-auto-disabled pool at includeDisabled validation first", () => {
+		const action = recommendBeginnerNextAction({
+			accounts: [
+				buildAccount({
+					enabled: false,
+					disabledReason: "disabled:auth-failures",
+				}),
+			],
+			now,
+			runtime: healthyRuntime,
+		});
+		expect(action).toContain("disabled automatically");
+		expect(action).toContain("codex-health includeDisabled=true");
+		expect(action).toContain("codex-enable");
+	});
+
+	it("offers login as the alternative when all accounts were disabled by the operator", () => {
+		const action = recommendBeginnerNextAction({
+			accounts: [buildAccount({ enabled: false })],
+			now,
+			runtime: healthyRuntime,
+		});
+		expect(action).toContain("codex-enable");
+		expect(action).toContain("opencode auth login");
 	});
 });
 

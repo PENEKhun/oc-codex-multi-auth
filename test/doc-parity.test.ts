@@ -341,13 +341,13 @@ describe("runtime documentation parity", () => {
 		).sort();
 
 		expect(registeredTools).toEqual(toolFiles);
-		expect(registeredTools).toHaveLength(24);
+		expect(registeredTools).toHaveLength(25);
 
 		const docsExpectations: Array<[string, string[]]> = [
 			[
 				"docs/development/ARCHITECTURE.md",
 				[
-					"24 OpenCode tools",
+					"25 OpenCode tools",
 					"`codex-list`, `codex-switch`, `codex-warm`",
 					"every registered `codex-*` tool is its own file under `lib/tools/`",
 				],
@@ -355,7 +355,7 @@ describe("runtime documentation parity", () => {
 			[
 				"docs/architecture.md",
 				[
-					"24 per-file factories",
+					"25 per-file factories",
 					"`codex-list`, `codex-switch`, `codex-warm`",
 				],
 			],
@@ -369,7 +369,7 @@ describe("runtime documentation parity", () => {
 			[
 				"lib/tools/AGENTS.md",
 				[
-					"24 `codex-*` tools",
+					"25 `codex-*` tools",
 					"codex-keychain.ts",
 				],
 			],

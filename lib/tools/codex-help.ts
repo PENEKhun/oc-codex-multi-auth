@@ -65,6 +65,7 @@ export function createCodexHelpTool(ctx: ToolContext): ToolDefinition {
 						"Set account tags: codex-tag index=2 tags=\"work,team-a\"",
 						"Set account note: codex-note index=2 note=\"weekday primary\"",
 						"Filter by tag: codex-list tag=\"work\"",
+						"Re-enable account: codex-enable index=2",
 						"Remove account: codex-remove index=2 confirm=true",
 					],
 				},
@@ -73,7 +74,9 @@ export function createCodexHelpTool(ctx: ToolContext): ToolDefinition {
 					title: "Health and recovery",
 					lines: [
 						"Verify token health: codex-health",
+						"Validate disabled accounts too: codex-health includeDisabled=true",
 						"Refresh all tokens: codex-refresh",
+						"Re-enable auto-disabled account: codex-enable",
 						"Run diagnostics: codex-doctor",
 						"Run diagnostics with fixes: codex-doctor --fix",
 						"Show best next action: codex-next",

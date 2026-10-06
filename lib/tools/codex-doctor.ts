@@ -48,6 +48,7 @@ import {
 	type RefreshAccountIdentity,
 } from "./refresh-account.js";
 import { repairDoctorAccounts } from "./doctor-repair.js";
+import { readHostOpenAIOAuth } from "../host-auth.js";
 import {
 	TOOL_OUTPUT_FORMAT_DESCRIPTION,
 	TOOL_OUTPUT_FORMAT_VALUES,
@@ -167,6 +168,33 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					.map((index) => index + 1)
 					.join(", ")}).`,
 			});
+		}
+		// Every pool account disabled while the host still holds a native OpenAI
+		// OAuth credential: the host can keep serving requests outside managed
+		// rotation, which reads as "traffic works but the pool says disabled"
+		// (#288). Presence is reported, never the credential itself.
+		const allPoolAccountsDisabled =
+			storage !== null &&
+			storage.accounts.length > 0 &&
+			storage.accounts.every((account) => account.enabled === false);
+		if (allPoolAccountsDisabled) {
+			const hostEntry = await readHostOpenAIOAuth();
+			if (hostEntry) {
+				// Presence does not prove the credential can serve — the access
+				// token may be expired, in which case the host would refresh it
+				// on use. The wording has to hedge both ways, not claim live
+				// traffic (review: #290).
+				const expired = hostEntry.expires <= Date.now();
+				findings.push({
+					severity: "warning",
+					code: "host-oauth-outside-pool",
+					summary: expired
+						? "An expired host-level OpenAI OAuth credential exists outside the managed pool; the host may still refresh it to serve requests while every pool account is disabled."
+						: "A host-level OpenAI OAuth credential exists outside the managed pool; requests may still be served by it while every pool account is disabled.",
+					action:
+						"Re-enable a pool account with `codex-enable` to return traffic to managed rotation, or remove the host credential with `opencode auth logout`.",
+				});
+			}
 		}
 		const origin = getPluginOrigin();
 		const replacedCheckout = origin

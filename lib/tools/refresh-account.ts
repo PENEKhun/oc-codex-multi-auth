@@ -56,12 +56,18 @@ export function findAccountIndexByIdentity(
  * (they may intentionally retain a dead duplicate credential), while disabled
  * siblings sharing an enabled account's consumed token are still updated by
  * `coordinatePersistedRefresh()` so the shared credential remains consistent.
+ *
+ * `includeDisabled` opts back in for diagnostics that must validate a
+ * retained credential — an auto-disabled sole account is otherwise a dead
+ * end (#288). Validating is not re-enabling: the rotation persists onto the
+ * record but `enabled` stays false.
  */
 export async function refreshAndPersistAccount(
 	account: RefreshAccountInput,
+	options?: { includeDisabled?: boolean },
 ): Promise<AccountRefreshOutcome> {
 	const { index, identity } = account;
-	if (account.enabled === false) {
+	if (account.enabled === false && options?.includeDisabled !== true) {
 		return { status: "skipped", index, identity };
 	}
 

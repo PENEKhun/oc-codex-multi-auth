@@ -1,14 +1,14 @@
 # Tools and CLI
 
-Reference for the **24** OpenCode `codex-*` tools and the standalone `oc-codex-multi-auth` bin.
+Reference for the **25** OpenCode `codex-*` tools and the standalone `oc-codex-multi-auth` bin.
 
 Tools run inside OpenCode (agent/tool surface). The standalone bin is an installer plus a thin CLI that runs the same diagnostics without an agent loop.
 
 ---
 
-## OpenCode tools (24)
+## OpenCode tools (25)
 
-Registered from per-file factories under `lib/tools/` via `createToolRegistry` in `lib/tools/index.ts`. Account numbers you **pass in** (`index`, `account`, `accounts[]`) are **1-based**; `switch`, `label`, `tag`, `note`, and `remove` open an interactive picker when `index` is omitted and the terminal supports menus. Numbers a command **prints back** differ by surface: `Account N` labels, picker entries, and tool `format="json"` `index`/`activeIndex` fields are all 1-based (tool JSON also carries the storage position separately as `zeroBasedIndex`), while the standalone CLI's `[N]` labels and `--json` `index` fields are the account's raw **0-based** storage position (see [Account numbering](#account-numbering)).
+Registered from per-file factories under `lib/tools/` via `createToolRegistry` in `lib/tools/index.ts`. Account numbers you **pass in** (`index`, `account`, `accounts[]`) are **1-based**; `switch`, `label`, `tag`, `note`, `enable`, and `remove` open an interactive picker when `index` is omitted and the terminal supports menus. Numbers a command **prints back** differ by surface: `Account N` labels, picker entries, and tool `format="json"` `index`/`activeIndex` fields are all 1-based (tool JSON also carries the storage position separately as `zeroBasedIndex`), while the standalone CLI's `[N]` labels and `--json` `index` fields are the account's raw **0-based** storage position (see [Account numbering](#account-numbering)).
 
 | Tool | Purpose |
 | --- | --- |
@@ -24,7 +24,8 @@ Registered from per-file factories under `lib/tools/` via `createToolRegistry` i
 | `codex-metrics` | Runtime request metrics for this plugin process |
 | `codex-dashboard` | Live dashboard: account eligibility, retry budgets, refresh-queue health |
 | `codex-doctor` | Beginner-friendly diagnostics with clear fixes |
-| `codex-health` | Verify every account by validating its refresh token (network calls) |
+| `codex-health` | Verify every account by validating its refresh token (network calls); `includeDisabled` validates disabled accounts too |
+| `codex-enable` | Re-enable a disabled account; clears the plugin's auto-disable note and auth-failure cooldown |
 | `codex-label` | Set or clear a display label |
 | `codex-tag` | Set or clear comma-separated tags |
 | `codex-note` | Set or clear a private account note |
@@ -55,13 +56,14 @@ Registered from per-file factories under `lib/tools/` via `createToolRegistry` i
 | `codex-metrics` | `format?` |
 | `codex-dashboard` | `format?`, `includeSensitive?` |
 | `codex-doctor` | `deep?`, `fix?` (verified refresh + clear stale markers), `format?` |
-| `codex-health` | `format?`, `includeSensitive?` |
+| `codex-health` | `format?`, `includeSensitive?`, `includeDisabled?` |
+| `codex-enable` | `index?` (picker when omitted; a sole disabled account is selected automatically) |
 | `codex-label` | `index?`, `label` (empty clears) |
 | `codex-tag` | `index?`, `tags` (CSV; empty clears) |
 | `codex-note` | `index?`, `note` (empty clears) |
 | `codex-pool` | `action?` (`status`\|`set`\|`add`\|`remove`\|`clear`\|`set-mode`), `model?`, `accounts?` (1-based array), `poolMode?` (`preferred`\|`strict`), `dryRun?`, `format?`, `includeSensitive?` |
 | `codex-remove` | `index?`, `confirm?` (must be `true`; otherwise a no-op that prints guidance) |
-| `codex-refresh` | _(none)_ |
+| `codex-refresh` | `includeDisabled?` |
 | `codex-export` | `path?`, `force?`, `timestamped?` (default true when `path` omitted) |
 | `codex-import` | `path`, `dryRun?` |
 | `codex-diag` | _(none)_ |

@@ -226,6 +226,86 @@ export function stripReauthNote(accountNote: string | undefined): string | undef
 }
 
 /**
+ * Markers plugin code writes onto records it disables itself, so an
+ * `enabled: false` it produced stays distinguishable from the operator's own
+ * choice — which the load/repair paths honor as intentional (#288). A bare
+ * `enabled: false` had meant "operator did it", leaving auto-disabled
+ * accounts unexplainable in diagnostics and unreachable except via the TUI.
+ * Re-enabling strips the marker; operator text around it survives.
+ */
+export const AUTH_FAILURE_DISABLE_NOTE_MARKER =
+	"Disabled automatically after repeated authentication failures.";
+export const WORKSPACE_DEACTIVATED_NOTE_MARKER =
+	"Disabled automatically after workspace deactivation.";
+const AUTO_DISABLE_NOTE_MARKERS = [
+	AUTH_FAILURE_DISABLE_NOTE_MARKER,
+	WORKSPACE_DEACTIVATED_NOTE_MARKER,
+] as const;
+
+export function hasAuthFailureDisableNote(
+	accountNote: string | undefined,
+): boolean {
+	return (
+		typeof accountNote === "string" &&
+		accountNote.includes(AUTH_FAILURE_DISABLE_NOTE_MARKER)
+	);
+}
+
+export function hasAutoDisableNote(accountNote: string | undefined): boolean {
+	return (
+		typeof accountNote === "string" &&
+		AUTO_DISABLE_NOTE_MARKERS.some((marker) => accountNote.includes(marker))
+	);
+}
+
+/** Reason string for the selection explainability `reasons` list. */
+export function describeDisabledReason(accountNote: string | undefined): string {
+	if (hasAuthFailureDisableNote(accountNote)) return "disabled:auth-failures";
+	if (
+		typeof accountNote === "string" &&
+		accountNote.includes(WORKSPACE_DEACTIVATED_NOTE_MARKER)
+	) {
+		return "disabled:workspace-deactivated";
+	}
+	if (hasMissingScopeReauthNote(accountNote)) return "disabled:reauth-required";
+	return "disabled";
+}
+
+export function appendAutoDisableNote(
+	accountNote: string | undefined,
+	marker: (typeof AUTO_DISABLE_NOTE_MARKERS)[number],
+): string {
+	const preserved = stripAutoDisableNote(accountNote);
+	return preserved ? `${preserved} ${marker}` : marker;
+}
+
+/**
+ * Removes only the auto-disable sentence, wherever it sits — operator text
+ * before it and a later re-auth sentence after it both survive, unlike the
+ * cut-to-end semantics `stripReauthNote` gets away with by always appending
+ * last.
+ */
+export function stripAutoDisableNote(
+	accountNote: string | undefined,
+): string | undefined {
+	if (!accountNote) return undefined;
+	let note = accountNote;
+	for (const marker of AUTO_DISABLE_NOTE_MARKERS) {
+		const markerIndex = note.indexOf(marker);
+		if (markerIndex < 0) continue;
+		// Swallow the joining space `appendAutoDisableNote` put in so removing
+		// a mid-string marker does not leave a double gap behind.
+		const start =
+			markerIndex > 0 && note[markerIndex - 1] === " "
+				? markerIndex - 1
+				: markerIndex;
+		note = `${note.slice(0, start)}${note.slice(markerIndex + marker.length)}`;
+	}
+	const preserved = note.trim();
+	return preserved.length > 0 ? preserved : undefined;
+}
+
+/**
  * Required-scope check that only fires when the granted scope is actually
  * known. Absent scope metadata means "unknown", NOT "nothing was granted":
  * `refreshAccessToken` deliberately omits `scope` when the token response does,
@@ -592,7 +672,9 @@ export class AccountState {
 				? account.quotaExhaustedUntil
 				: undefined;
 
-			if (!enabled) reasons.push("disabled");
+			if (!enabled) {
+				reasons.push(describeDisabledReason(account.accountNote));
+			}
 			if (rateLimitedUntil !== undefined) reasons.push("rate-limited");
 			if (quotaExhaustedUntil !== undefined) reasons.push("quota-exhausted");
 			if (coolingDownUntil !== undefined) {
@@ -845,6 +927,16 @@ export class AccountState {
 		const account = this.accounts[index];
 		if (!account) return null;
 		account.enabled = enabled;
+		if (enabled) {
+			// Re-enabling drops the plugin's own attribution; operator text
+			// around the marker survives (strip preserves it).
+			account.accountNote = stripAutoDisableNote(account.accountNote);
+			// A leftover auth-failure cooldown would keep the account out of
+			// rotation even with `enabled` restored — re-enable must mean usable.
+			if (account.cooldownReason === "auth-failure") {
+				this.clearAccountCooldown(account);
+			}
+		}
 		return account;
 	}
 

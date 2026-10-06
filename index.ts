@@ -152,6 +152,11 @@ import {
 	type ModelPoolAccount,
 } from "./lib/accounts/pool-identity.js";
 import {
+	describeDisabledReason,
+	hasAutoDisableNote,
+	stripAutoDisableNote,
+} from "./lib/accounts/state.js";
+import {
 	formatSeatSuffix,
 	maskIdentityValue,
 	resolveDisplayEmail,
@@ -1585,6 +1590,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				coolingDownUntil:
 					typeof account.coolingDownUntil === "number"
 						? account.coolingDownUntil
+						: null,
+				disabledReason:
+					account.enabled === false
+						? describeDisabledReason(account.accountNote)
 						: null,
 			}));
 		};
@@ -4452,6 +4461,19 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 
 								const waitMs = accountManager.getMinWaitTimeForFamily(modelFamily, model);
 								const count = accountManager.getAccountCount();
+								// Every configured account disabled is not a rate limit and
+								// must not render as one — a leftover auth-failure cooldown
+								// would otherwise report "all rate-limited" forever (#288).
+								const configuredAccounts = accountManager.getAccountsSnapshot();
+								const allDisabled =
+									count > 0 &&
+									configuredAccounts.length > 0 &&
+									configuredAccounts.every((entry) => entry.enabled === false);
+								const allAutoDisabled =
+									allDisabled &&
+									configuredAccounts.every((entry) =>
+										hasAutoDisableNote(entry.accountNote),
+									);
 								// Counted over the accounts that are still live rather than as
 								// `count - attemptedCount`: an account removed mid-traversal was
 								// genuinely attempted but is no longer one of the `count`
@@ -4596,11 +4618,15 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								const message =
 									count === 0
 										? "No Codex accounts configured. Run `opencode auth login`."
-										: waitMs > 0
-											? `All ${count} account(s) are rate-limited. Try again in ${waitLabel} or add another account with \`opencode auth login\`.${outOfQuotaCredits}`
-											: wasEntitlementExhaustion
-												? `No selectable account succeeded for the requested model across ${count} configured account(s).${entitlementDetail} Codex model access is account/workspace gated; default gpt-5.6-sol/terra/luna selectors auto-fallback down the 5.6 tiers to gpt-5.5, and gpt-5.5/gpt-5-codex through the GPT-5.4 family when possible. Set \`unsupportedCodexPolicy: "fallback"\` for the full manual fallback chain, or see \`codex-health\` for per-account details.`
-												: `All ${count} account(s) failed (server errors or auth issues). Check account health with \`codex-health\`.`;
+										: allDisabled
+											? allAutoDisabled
+												? `All ${count} Codex account(s) were disabled automatically (repeated authentication failures or workspace deactivation). Validate the retained credentials with \`codex-health includeDisabled=true\`, then re-enable with \`codex-enable\` — or add an account with \`opencode auth login\`.`
+												: `All ${count} Codex account(s) are disabled. Re-enable with \`codex-enable\` or add an account with \`opencode auth login\`.`
+											: waitMs > 0
+												? `All ${count} account(s) are rate-limited. Try again in ${waitLabel} or add another account with \`opencode auth login\`.${outOfQuotaCredits}`
+												: wasEntitlementExhaustion
+													? `No selectable account succeeded for the requested model across ${count} configured account(s).${entitlementDetail} Codex model access is account/workspace gated; default gpt-5.6-sol/terra/luna selectors auto-fallback down the 5.6 tiers to gpt-5.5, and gpt-5.5/gpt-5-codex through the GPT-5.4 family when possible. Set \`unsupportedCodexPolicy: "fallback"\` for the full manual fallback chain, or see \`codex-health\` for per-account details.`
+													: `All ${count} account(s) failed (server errors or auth issues). Check account health with \`codex-health\`.`;
 								// `code` mirrors the strict-pool envelope's
 								// `strict_pool_unavailable` so a client can branch
 								// on a stable machine string instead of parsing the
@@ -4609,25 +4635,29 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								const code =
 									count === 0
 										? "no_accounts_configured"
-										: waitMs > 0
-											? "all_accounts_rate_limited"
-											: wasEntitlementExhaustion
-												? "model_not_entitled"
-												: "all_accounts_failed";
+										: allDisabled
+											? "all_accounts_disabled"
+											: waitMs > 0
+												? "all_accounts_rate_limited"
+												: wasEntitlementExhaustion
+													? "model_not_entitled"
+													: "all_accounts_failed";
 								runtimeMetrics.failedRequests++;
 								runtimeMetrics.lastError = message;
 								runtimeMetrics.lastErrorCategory =
-									waitMs > 0
-										? "rate-limit"
-										: wasEntitlementExhaustion
-											? "unsupported-model"
-											: "account-failure";
+									allDisabled
+										? "account-failure"
+										: waitMs > 0
+											? "rate-limit"
+											: wasEntitlementExhaustion
+												? "unsupported-model"
+												: "account-failure";
 								return new Response(
 									JSON.stringify({
 										error: { code, message: `${message} ${REQUEST_LOG_HINT}` },
 									}),
 									{
-										status: waitMs > 0 ? 429 : 503,
+										status: waitMs > 0 && !allDisabled ? 429 : 503,
 											headers: {
 												"content-type": "application/json; charset=utf-8",
 											},
@@ -5413,6 +5443,18 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 												if (!current || !currentTarget) return;
 												currentTarget.enabled = currentTarget.enabled === false;
 												enabled = currentTarget.enabled;
+												// Enabling by hand must shed the plugin's auto-disable
+												// attribution or the account stays marked as
+												// machine-disabled after the operator chose it.
+												if (enabled) {
+													currentTarget.accountNote = stripAutoDisableNote(
+														currentTarget.accountNote,
+													);
+													if (currentTarget.cooldownReason === "auth-failure") {
+														delete currentTarget.coolingDownUntil;
+														delete currentTarget.cooldownReason;
+													}
+												}
 												await persist(current);
 											});
 											invalidateAccountManagerCache();

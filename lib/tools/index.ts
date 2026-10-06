@@ -49,6 +49,7 @@ import { createCodexPoolTool } from "./codex-pool.js";
 import { createCodexNoteTool } from "./codex-note.js";
 import { createCodexDashboardTool } from "./codex-dashboard.js";
 import { createCodexHealthTool } from "./codex-health.js";
+import { createCodexEnableTool } from "./codex-enable.js";
 import { createCodexRemoveTool } from "./codex-remove.js";
 import { createCodexRefreshTool } from "./codex-refresh.js";
 import { createCodexExportTool } from "./codex-export.js";
@@ -255,6 +256,7 @@ export function createToolRegistry(ctx: ToolContext): CodexToolRegistry {
 		"codex-note": createCodexNoteTool(ctx),
 		"codex-dashboard": createCodexDashboardTool(ctx),
 		"codex-health": createCodexHealthTool(ctx),
+		"codex-enable": createCodexEnableTool(ctx),
 		"codex-remove": createCodexRemoveTool(ctx),
 		"codex-refresh": createCodexRefreshTool(ctx),
 		"codex-export": createCodexExportTool(ctx),

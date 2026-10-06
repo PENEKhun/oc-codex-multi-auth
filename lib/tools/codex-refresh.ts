@@ -24,8 +24,16 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 	const definition = tool({
 		description:
 			"Manually refresh OAuth tokens for all accounts to verify they're still valid.",
-		args: {},
-		async execute() {
+		args: {
+			includeDisabled: tool.schema
+				.boolean()
+				.optional()
+				.describe(
+					"Also refresh the retained credentials of disabled accounts. " +
+						"Refreshing is not re-enable — the account stays disabled until re-enabled with codex-enable.",
+				),
+		},
+		async execute({ includeDisabled }: { includeDisabled?: boolean } = {}) {
 			const ui = resolveUiRuntime();
 			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
@@ -58,10 +66,16 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 					maskEmail,
 					peerAccounts: storage.accounts,
 				});
-				const outcome = await refreshAndPersistAccount(input);
+				const outcome = await refreshAndPersistAccount(input, {
+					includeDisabled: includeDisabled === true,
+				});
 
 				if (outcome.status === "refreshed") {
-					results.push(`  ${getStatusMarker(ui, "ok")} ${label}: Refreshed`);
+					results.push(
+						account.enabled === false
+							? `  ${getStatusMarker(ui, "ok")} ${label}: Refreshed (still disabled — re-enable with \`codex-enable\`)`
+							: `  ${getStatusMarker(ui, "ok")} ${label}: Refreshed`,
+					);
 					refreshedCount++;
 				} else if (outcome.status === "skipped") {
 					results.push(
@@ -84,6 +98,11 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 				results.push(
 					`Summary: ${refreshedCount} refreshed, ${failedCount} failed, ${skippedCount} skipped`,
 				);
+				if (includeDisabled !== true) {
+					results.push(
+						`Hint: ${skippedCount} disabled account(s) were not refreshed. Re-run with includeDisabled=true to validate their retained credentials.`,
+					);
+				}
 			} else {
 				results.push(
 					`Summary: ${refreshedCount} refreshed, ${failedCount} failed`,

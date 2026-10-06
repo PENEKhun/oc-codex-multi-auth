@@ -8,6 +8,10 @@ import { loadAccounts } from "../storage.js";
 import { AccountManager, formatCooldown, formatWaitTime } from "../accounts.js";
 import { resolveSeatSuffixes } from "../account-display.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
+import {
+	describeDisabledReason,
+	hasAutoDisableNote,
+} from "../accounts/state.js";
 import { recommendBeginnerNextAction } from "../ui/beginner.js";
 import {
 	buildTableHeader,
@@ -164,6 +168,10 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 							peerAccounts: storage.accounts,
 						}),
 						enabled: account.enabled !== false,
+						disabledReason:
+							account.enabled === false
+								? describeDisabledReason(account.accountNote)
+								: null,
 						isActive: index === activeIndex,
 						planType: account.planType ?? null,
 						plan: formatPlanType(account.planType) ?? null,
@@ -243,7 +251,15 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 					if (index === activeIndex)
 						badges.push(formatUiBadge(ui, "active", "accent"));
 					if (account.enabled === false)
-						badges.push(formatUiBadge(ui, "disabled", "danger"));
+						badges.push(
+							formatUiBadge(
+								ui,
+								hasAutoDisableNote(account.accountNote)
+									? "auto-disabled"
+									: "disabled",
+								"danger",
+							),
+						);
 					const rateLimit = formatRateLimitEntry(account, now) ?? "none";
 					const quotaExhausted = formatQuotaExhaustionEntry(account, now) ?? "none";
 					const cooldown = formatCooldown(account, now) ?? "none";

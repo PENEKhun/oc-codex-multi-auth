@@ -22,7 +22,7 @@ lib/
 ├── opencode-v2-rpc.ts      # CodexStatusRpc RPC definition (status method)
 ├── opencode-v2-status.ts   # plugin-side quota/accounts formatting for the status RPC
 ├── opencode-v2-tui.ts      # V2 TUI slots: status line, accounts sidebar, palette + /codex-accounts commands
-├── tools/                  # index (ToolContext + registry), args (shared arg constants), doctor-repair, refresh-account + 24 `codex-*` factories — see lib/tools/AGENTS.md
+├── tools/                  # index (ToolContext + registry), args (shared arg constants), doctor-repair, refresh-account + 25 `codex-*` factories — see lib/tools/AGENTS.md
 ├── ui/                     # ansi, auth-menu, beginner, confirm, format, runtime, select, theme — terminal UI
 ├── types/                  # dependency type shims (napi-rs-keyring.d.ts)
 ├── account-display.ts      # account identity rendering + maskEmail privacy
