@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 
 export async function runRotationValidate(argv) {
@@ -25,7 +26,8 @@ export async function runRotationValidate(argv) {
 		if (!module) return fail("No customRotation.module configured");
 		let fixtures;
 		if (fixturePath) {
-			const file = await open(fixturePath, "r");
+			// Reach descriptor validation even for a POSIX FIFO with no writer.
+			const file = await open(fixturePath, constants.O_RDONLY | constants.O_NONBLOCK);
 			try {
 				const info = await file.stat();
 				if (!info.isFile() || info.size > 1_048_576) return fail("Rotation fixtures must be a regular file of at most 1 MiB");
