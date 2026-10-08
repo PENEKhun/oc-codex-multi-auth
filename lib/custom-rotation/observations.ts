@@ -66,8 +66,8 @@ export class RotationObservations {
 		this.accounts.set(data.id, {
 			...data,
 			plan: this.field(data.plan, payload.plan_type, meta),
-			primary: this.window(data.primary, mapUsageWindow(payload.rate_limit?.primary_window ?? null), meta),
-			secondary: this.window(data.secondary, mapUsageWindow(payload.rate_limit?.secondary_window ?? null), meta),
+			primary: this.window(data.primary, mapUsageWindow(payload.rate_limit?.primary_window), meta),
+			secondary: this.window(data.secondary, mapUsageWindow(payload.rate_limit?.secondary_window), meta),
 			credits: this.field(data.credits, payload.credits ? { balance: typeof payload.credits.balance === "string" ? payload.credits.balance : null, unlimited: payload.credits.unlimited === true } : undefined, meta),
 		});
 	}

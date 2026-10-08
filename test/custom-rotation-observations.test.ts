@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RotationObservations } from "../lib/custom-rotation/observations.js";
 import type { AccountMetadataV3 } from "../lib/storage.js";
+import type { UsagePayload } from "../lib/codex-usage.js";
 
 const account: AccountMetadataV3 = { accountId: "business", accountUserId: "seat-a", refreshToken: "synthetic", addedAt: 1, lastUsed: 2 };
 describe("custom rotation observations", () => {
@@ -14,6 +15,77 @@ describe("custom rotation observations", () => {
 		store.usage(account, "project", { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 500 } } }, 1000);
 		const result = store.snapshot(account, "project", 301_000);
 		expect(result.primary.usedPercent).toMatchObject({ status: "stale", value: 20, scope: "seat", observedAt: 1000 });
+	});
+	it.each([
+		{},
+		{ rate_limit: {} },
+		{ credits: { balance: "12", unlimited: false } },
+	] satisfies UsagePayload[])("keeps never-observed windows unknown when usage omits them: %j", (payload) => {
+		// Given
+		const store = new RotationObservations();
+		// When
+		store.usage(account, "project", payload, 1000);
+		// Then
+		const result = store.snapshot(account, "project", 1000);
+		for (const window of [result.primary, result.secondary]) {
+			for (const field of Object.values(window)) {
+				expect(field).toEqual({ value: null, status: "unknown", observedAt: null, expiresAt: null, source: null, scope: "unknown" });
+			}
+		}
+	});
+	it("preserves header window freshness when usage only updates credits", () => {
+		// Given
+		const store = new RotationObservations();
+		store.headers(account, "project", new Headers({
+			"x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": "500",
+			"x-codex-secondary-used-percent": "40", "x-codex-secondary-window-minutes": "10080", "x-codex-secondary-reset-at": "900",
+		}), 1000);
+		const before = store.snapshot(account, "project", 1000);
+		// When
+		store.usage(account, "project", { credits: { balance: "12", unlimited: false } }, 2000);
+		// Then
+		const result = store.snapshot(account, "project", 2000);
+		expect(result.primary).toEqual(before.primary);
+		expect(result.secondary).toEqual(before.secondary);
+		const expired = store.snapshot(account, "project", 301_000);
+		for (const window of [expired.primary, expired.secondary]) {
+			for (const field of Object.values(window)) {
+				expect(field).toMatchObject({ status: "stale", observedAt: 1000, expiresAt: 301_000, source: "headers" });
+			}
+		}
+		expect(expired.credits).toMatchObject({ value: { balance: "12", unlimited: false }, status: "fresh", observedAt: 2000, expiresAt: 302_000, source: "usage" });
+	});
+	it("preserves missing fields and the secondary window when usage reports only primary utilization", () => {
+		// Given
+		const store = new RotationObservations();
+		store.usage(account, "project", { rate_limit: {
+			primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 500 },
+			secondary_window: { used_percent: 40, limit_window_seconds: 604800, reset_at: 900 },
+		} }, 1000);
+		const before = store.snapshot(account, "project", 1000);
+		// When
+		store.usage(account, "project", { rate_limit: { primary_window: { used_percent: 30 } } }, 2000);
+		// Then
+		const result = store.snapshot(account, "project", 301_000);
+		expect(result.primary.usedPercent).toMatchObject({ value: 30, status: "fresh", observedAt: 2000, expiresAt: 302_000 });
+		expect(result.primary.resetAtMs).toEqual({ ...before.primary.resetAtMs, status: "stale" });
+		expect(result.primary.windowMinutes).toEqual({ ...before.primary.windowMinutes, status: "stale" });
+		for (const key of ["usedPercent", "resetAtMs", "windowMinutes"] as const) {
+			expect(result.secondary[key]).toEqual({ ...before.secondary[key], status: "stale" });
+		}
+	});
+	it("marks both windows not-applicable when usage explicitly reports null", () => {
+		// Given
+		const store = new RotationObservations();
+		// When
+		store.usage(account, "project", { rate_limit: { primary_window: null, secondary_window: null } }, 1000);
+		// Then
+		const result = store.snapshot(account, "project", 1000);
+		for (const window of [result.primary, result.secondary]) {
+			for (const field of Object.values(window)) {
+				expect(field).toMatchObject({ value: null, status: "not-applicable", observedAt: 1000, source: "usage" });
+			}
+		}
 	});
 	it("marks disabled quota not-applicable when the plan reports a zero window", () => {
 		const store = new RotationObservations();
