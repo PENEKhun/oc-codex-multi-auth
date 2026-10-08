@@ -55,9 +55,12 @@ share a 1-second deadline (including synchronous loops). Up to four policy
 children run concurrently; excess calls use eligible fallback. Input is bounded
 to 1 MiB; combined stdout, stderr and result protocol to 64 KiB. The child receives
 no inherited Node loader/preload arguments, `NODE_OPTIONS`, HOME or tokens. On
-completion, cancellation or timeout the host kills and reaps the child and its
-ordinary process group. Deliberately escaping the process group is outside this
-trusted-code contract. Policies should be pure, fast, and avoid output and side
+completion, cancellation or timeout the host attempts to kill the POSIX process
+group or Windows process tree (`taskkill /T /F`). Teardown settles within an
+additional 250 ms even if descendants retain pipes or the Windows helper fails;
+failed tree termination can leave descendants alive. Deliberately escaping the
+group/tree or exiting the worker directly is outside this trusted-code contract.
+Policies should be pure, fast, and avoid output and side
 effects. There is no in-process policy cache or persistent script state.
 
 ## Observations

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { watch } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runRotationPolicy } from "../lib/custom-rotation/runner.js";
@@ -65,6 +66,25 @@ describe("bounded Node policy runner", () => {
 		const module = await policy("import { spawn } from 'node:child_process'; export function select() { spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); return null; }");
 		const result = await runRotationPolicy(module, context);
 		expect(result).toEqual({ accountId: null, error: null });
+	});
+	it.each(["timeout", "cancelled"] as const)("settles %s when an ordinary descendant inherits pipes", async (reason) => {
+		// Given: a real descendant retaining stdout/stderr after the policy stalls.
+		const ready = join(directory, "ready");
+		const module = await policy(`import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs'; export function select() {
+			spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+			writeFileSync(${JSON.stringify(ready)}, 'ready');
+			return new Promise(() => {});
+		}`);
+		const controller = new AbortController();
+		const watcher = watch(directory, (_event, filename) => {
+			if (filename === "ready" && reason === "cancelled") controller.abort();
+		});
+		// When: timeout or a readiness-triggered abort tears down the live tree.
+		let result;
+		try { result = await runRotationPolicy(module, context, { timeoutMs: 500, signal: controller.signal }); }
+		finally { watcher.close(); }
+		// Then: the host settles through the real process surface.
+		expect(result.error).toBe(reason);
 	});
 	it("cancels a running child when the host signal aborts", async () => {
 		const module = await policy("export function select() { while (true) {} }");

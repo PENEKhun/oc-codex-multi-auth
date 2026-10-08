@@ -11,16 +11,16 @@ for await (const chunk of process.stdin) {
 try {
   const { module, context } = JSON.parse(input);
   const policy = await import(pathToFileURL(module).href);
-  if (typeof policy.select !== 'function') process.exit(1);
+  if (typeof policy.select !== 'function') throw new Error();
   const id = await policy.select(context);
-  if (id !== null && (typeof id !== 'string' || id.length > 256)) process.exit(1);
+  if (id !== null && (typeof id !== 'string' || id.length > 256)) throw new Error();
   await Promise.all([
     new Promise((resolve) => process.stdout.write('', resolve)),
     new Promise((resolve) => process.stderr.write('', resolve)),
   ]);
-  writeSync(3, JSON.stringify({ accountId: id }));
-  process.exit(0);
+  // Keep the root alive until the host has read the entire frame and killed its tree.
+  writeSync(3, JSON.stringify({ accountId: id }) + '\n');
 } catch {
-  process.exit(1);
+  writeSync(3, JSON.stringify({ error: 'policy' }) + '\n');
 }
 `;
